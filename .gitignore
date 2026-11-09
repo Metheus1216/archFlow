@@ -147,3 +147,15 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Agent skills：真身在 .agents/skills（随仓库提交），.claude/skills 只是本地软链
+.claude/skills/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Local docker data (named volumes are managed by Docker; keep stray dumps out)
+/docker-data/
