@@ -13,6 +13,8 @@
     "dev:api": "turbo run dev --filter=@arch-flow/api...",
     "dev:agent": "turbo run dev --filter=@arch-flow/agent",
     "build": "turbo run build",
+    "build:web": "turbo run build --filter=@arch-flow/web",
+    "start:web": "pnpm --filter @arch-flow/web start",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "format": "prettier --write \"**/*.{ts,tsx,js,jsx,json,md,yaml,yml}\"",

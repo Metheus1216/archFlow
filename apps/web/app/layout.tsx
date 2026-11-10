@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Toaster } from "@/components/ui/sonner";
+import { harmonySans } from "./fonts";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -21,7 +22,11 @@ const themeScript = `(() => {
 })();`;
 
 const RootLayout = ({ children }: { children: ReactNode }) => (
-  <html lang="zh-CN" className="dark" suppressHydrationWarning>
+  <html
+    lang="zh-CN"
+    className={`dark ${harmonySans.variable}`}
+    suppressHydrationWarning
+  >
     <head>
       <script dangerouslySetInnerHTML={{ __html: themeScript }} />
     </head>
