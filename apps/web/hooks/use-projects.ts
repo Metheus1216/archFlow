@@ -21,6 +21,11 @@ type CreateProjectContext = {
   optimisticId: string;
 };
 
+type CreateProjectCallbacks = {
+  onCreated?: (project: ProjectNode) => void;
+  onFailed?: (error: Error) => void;
+};
+
 const buildOptimisticProject = (input: CreateProjectInput): ProjectNode => {
   const now = new Date().toISOString();
   const conversationId = crypto.randomUUID();
@@ -67,7 +72,11 @@ export const useProjects = (initialProjects?: ProjectNode[]) =>
       : undefined,
   });
 
-export const useCreateProject = () => {
+/**
+ * 创建项目。导航、提示等收尾动作通过 options 级回调注入，
+ * 这样即使触发创建的组件已卸载（例如首页跳转到工作台），回调仍会执行。
+ */
+export const useCreateProject = (callbacks: CreateProjectCallbacks = {}) => {
   const queryClient = useQueryClient();
 
   return useMutation<ProjectNode, Error, CreateProjectInput, CreateProjectContext>({
@@ -89,13 +98,14 @@ export const useCreateProject = () => {
 
       return { previous, optimisticId: optimistic.id };
     },
-    onError: (_error, _input, context) => {
+    onError: (error, _input, context) => {
       if (context?.previous) {
         queryClient.setQueryData(projectQueryKey, context.previous);
-        return;
+      } else {
+        queryClient.removeQueries({ queryKey: projectQueryKey });
       }
 
-      queryClient.removeQueries({ queryKey: projectQueryKey });
+      callbacks.onFailed?.(error);
     },
     onSuccess: (project, _input, context) => {
       queryClient.setQueryData<Page<ProjectNode>>(projectQueryKey, (current) =>
@@ -110,6 +120,7 @@ export const useCreateProject = () => {
       );
 
       void queryClient.invalidateQueries({ queryKey: projectQueryKey });
+      callbacks.onCreated?.(project);
     },
   });
 };

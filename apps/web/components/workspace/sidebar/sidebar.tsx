@@ -1,11 +1,11 @@
 import Link from "next/link";
-import { Settings, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import type { ProjectNode } from "@arch-flow/shared";
-import { DevLogout } from "@/components/dev-logout";
 import { BrandMark } from "@/components/logo";
 import { CreateProjectButton } from "@/components/project/create-project-button";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { AccountMenu } from "./account-menu";
 import { ProjectList } from "./project-list";
 
 export const Sidebar = ({ projects }: { projects: ProjectNode[] }) => {
@@ -51,14 +51,7 @@ export const Sidebar = ({ projects }: { projects: ProjectNode[] }) => {
               个人空间
             </p>
           </div>
-          <DevLogout />
-          <button
-            type="button"
-            aria-label="设置"
-            className="flex size-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
-          >
-            <Settings className="size-3.5" strokeWidth={1.75} />
-          </button>
+          <AccountMenu />
         </div>
       </div>
     </aside>

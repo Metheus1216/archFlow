@@ -13,16 +13,27 @@ import {
 type ItemActionsMenuProps = {
   itemName: string;
   alwaysVisible?: boolean;
+  onRename?: () => void;
   onDelete?: () => void;
 };
 
 export const ItemActionsMenu = ({
   itemName,
   alwaysVisible = false,
+  onRename,
   onDelete,
 }: ItemActionsMenuProps) => {
   const handleAction = (action: string) => {
     toast.info(`“${itemName}”的${action}功能尚未接入`);
+  };
+
+  const handleRename = () => {
+    if (onRename) {
+      onRename();
+      return;
+    }
+
+    handleAction("重命名");
   };
 
   const handleDelete = () => {
@@ -60,7 +71,7 @@ export const ItemActionsMenu = ({
         </DropdownMenuItem>
         <DropdownMenuItem
           className="text-xs"
-          onSelect={() => handleAction("重命名")}
+          onSelect={handleRename}
         >
           <Pencil className="size-3.5" strokeWidth={1.75} />
           重命名

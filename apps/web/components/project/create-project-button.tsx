@@ -27,38 +27,36 @@ export const CreateProjectButton = ({
 }: CreateProjectButtonProps) => {
   const router = useRouter();
   const pathname = usePathname();
-  const createProject = useCreateProject();
+  const origin = pathname;
+
+  /**
+   * 收尾回调放在 mutation options 层：
+   * 首页点击后会立刻跳转、按钮随之卸载，逐次 mutate 的回调不再可靠。
+   */
+  const createProject = useCreateProject({
+    onCreated: (project) => {
+      const conversationId = project.lastActiveConversationId;
+
+      toast.success("项目已创建");
+      router.replace(
+        conversationId
+          ? `/workspace?conversationId=${conversationId}`
+          : "/workspace",
+      );
+    },
+    onFailed: (error) => {
+      toast.error(error.message);
+
+      if (origin !== "/workspace") {
+        router.push(origin);
+      }
+    },
+  });
 
   const handleCreate = () => {
-    const origin = pathname;
-    const shouldEnterWorkspaceNow = pathname !== "/workspace";
+    createProject.mutate({ name: DEFAULT_PROJECT_NAME });
 
-    createProject.mutate(
-      { name: DEFAULT_PROJECT_NAME },
-      {
-        onSuccess: (project) => {
-          const conversationId = project.lastActiveConversationId;
-
-          toast.success("项目已创建");
-          router.replace(
-            conversationId
-              ? `/workspace?conversationId=${conversationId}`
-              : "/workspace",
-          );
-        },
-        onError: (error) => {
-          toast.error(
-            error instanceof Error ? error.message : "创建项目失败",
-          );
-
-          if (origin !== "/workspace") {
-            router.push(origin);
-          }
-        },
-      },
-    );
-
-    if (shouldEnterWorkspaceNow) {
+    if (origin !== "/workspace") {
       router.push("/workspace");
     }
   };

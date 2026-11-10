@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import type { Page, ProjectNode } from "@arch-flow/shared";
 import { requestApiVoid } from "@/lib/api-client";
 import { conversationQueryKey } from "./use-conversation";
+import { messagesQueryKey } from "./use-messages";
 import { projectQueryKey } from "./use-projects";
 
 type OptimisticDeleteOptions<TVariables extends { projectId: string }> = {
@@ -168,6 +169,9 @@ export const useDeleteConversation = () => {
     onDeleted: ({ conversationId, isActive }) => {
       queryClient.removeQueries({
         queryKey: conversationQueryKey(conversationId),
+      });
+      queryClient.removeQueries({
+        queryKey: messagesQueryKey(conversationId),
       });
 
       if (isActive) {

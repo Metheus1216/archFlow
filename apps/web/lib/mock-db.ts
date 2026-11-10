@@ -6,14 +6,18 @@ import path from "node:path";
 import {
   MockDatabase,
   type AssetBrief,
+  type Conversation,
   type ConversationBrief,
-  type ConversationDetail,
+  type CreateConversationInput,
   type CreateProjectInput,
   type FileBrief,
   type Message,
+  type MessageListQuery,
   type MockAssetRecord,
   type MockConversationRecord,
   type MockFileRecord,
+  type MockGraph,
+  type Page,
   type Project,
   type ProjectNode,
   type SendMessageInput,
@@ -35,6 +39,63 @@ const emptyDatabase = (): MockDatabase => ({
   assets: [],
   conversations: [],
 });
+
+/** 新建项目时种入的示例资产画布，用于验证“从资产开新会话”。 */
+const DEFAULT_ASSET_GRAPH: MockGraph = {
+  nodes: [
+    {
+      id: "node-client",
+      kind: "client",
+      eyebrow: "客户端",
+      label: "Web / App",
+      meta: "用户入口",
+      left: 16,
+      top: 50,
+    },
+    {
+      id: "node-gateway",
+      kind: "gateway",
+      eyebrow: "接入层",
+      label: "API Gateway",
+      meta: "鉴权 / 限流",
+      left: 40,
+      top: 50,
+    },
+    {
+      id: "node-service",
+      kind: "service",
+      eyebrow: "应用层",
+      label: "核心服务",
+      meta: "领域逻辑",
+      left: 64,
+      top: 30,
+    },
+    {
+      id: "node-database",
+      kind: "database",
+      eyebrow: "存储层",
+      label: "PostgreSQL",
+      meta: "主数据",
+      left: 84,
+      top: 52,
+    },
+    {
+      id: "node-cache",
+      kind: "cache",
+      eyebrow: "存储层",
+      label: "Redis",
+      meta: "热点缓存",
+      left: 64,
+      top: 74,
+    },
+  ],
+  edges: [
+    { id: "edge-client-gateway", path: "M 16 50 L 40 50" },
+    { id: "edge-gateway-service", path: "M 40 50 L 64 30" },
+    { id: "edge-service-db", path: "M 64 30 L 84 52" },
+    { id: "edge-gateway-cache", path: "M 40 50 L 64 74" },
+  ],
+};
 
 const readDatabase = async (): Promise<MockDatabase> => {
   try {
@@ -58,6 +119,20 @@ const toConversationBrief = (
 ): ConversationBrief => ({
   id: conversation.id,
   title: conversation.title,
+  updatedAt: conversation.updatedAt,
+});
+
+const toConversation = (
+  conversation: MockConversationRecord,
+): Conversation => ({
+  id: conversation.id,
+  projectId: conversation.projectId,
+  title: conversation.title,
+  draftGraph: conversation.draftGraph,
+  draftVersion: conversation.draftVersion,
+  messageCount: conversation.messageCount,
+  lastMessage: conversation.lastMessage,
+  createdAt: conversation.createdAt,
   updatedAt: conversation.updatedAt,
 });
 
@@ -159,6 +234,7 @@ export const createProject = async (
     projectId,
     name: "初始架构",
     createdAt: timestamp,
+    graphData: DEFAULT_ASSET_GRAPH,
   };
 
   /** 历史会话骨架：新项目下创建一条新会话。 */
@@ -183,6 +259,59 @@ export const createProject = async (
   });
 
   return toProjectNode(project, [conversation], [file], [asset]);
+};
+
+export type CreateConversationResult =
+  | { status: "created"; conversation: Conversation }
+  | { status: "project_not_found" }
+  | { status: "asset_not_found" };
+
+/** 在项目下新建空会话（画布初始为空）。 */
+export const createConversation = async (
+  projectId: string,
+  input: CreateConversationInput,
+): Promise<CreateConversationResult> => {
+  const database = await readDatabase();
+  const projectExists = database.projects.some(
+    (project) => project.id === projectId,
+  );
+
+  if (!projectExists) {
+    return { status: "project_not_found" };
+  }
+
+  /** §4.1：initialAssetId 必须属于当前项目，并用资产图初始化草稿。 */
+  const initialAsset = input.initialAssetId
+    ? database.assets.find(
+        (asset) =>
+          asset.id === input.initialAssetId && asset.projectId === projectId,
+      )
+    : undefined;
+
+  if (input.initialAssetId && !initialAsset) {
+    return { status: "asset_not_found" };
+  }
+
+  const timestamp = new Date().toISOString();
+  const conversation: MockConversationRecord = {
+    id: randomUUID(),
+    projectId,
+    title: input.title ?? "新会话",
+    draftGraph: initialAsset?.graphData ?? null,
+    draftVersion: 0,
+    messageCount: 0,
+    lastMessage: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    messages: [],
+  };
+
+  await writeDatabase({
+    ...database,
+    conversations: [...database.conversations, conversation],
+  });
+
+  return { status: "created", conversation: toConversation(conversation) };
 };
 
 /** 删除项目：级联删除其知识库文件、资产与会话。 */
@@ -274,6 +403,32 @@ export const deleteConversation = async (
   return true;
 };
 
+/** 重命名会话；不改变 updatedAt，避免侧边栏排序因改名而跳动。 */
+export const renameConversation = async (
+  conversationId: string,
+  title: string,
+): Promise<Conversation | null> => {
+  const database = await readDatabase();
+  const conversation = database.conversations.find(
+    (item) => item.id === conversationId,
+  );
+
+  if (!conversation) {
+    return null;
+  }
+
+  const updated: MockConversationRecord = { ...conversation, title };
+
+  await writeDatabase({
+    ...database,
+    conversations: database.conversations.map((item) =>
+      item.id === conversationId ? updated : item,
+    ),
+  });
+
+  return toConversation(updated);
+};
+
 /** 追加一条用户消息，并同步会话的计数、摘要与更新时间。 */
 export const appendMessage = async (
   conversationId: string,
@@ -321,9 +476,27 @@ export const appendMessage = async (
   return message;
 };
 
-export const getConversationDetail = async (
+/** §4.2：只返回会话元信息 + 草稿图，不含消息。 */
+export const getConversation = async (
   conversationId: string,
-): Promise<ConversationDetail | null> => {
+): Promise<Conversation | null> => {
+  const database = await readDatabase();
+  const record = database.conversations.find(
+    (conversation) => conversation.id === conversationId,
+  );
+
+  return record ? toConversation(record) : null;
+};
+
+/**
+ * §4.4：消息游标分页。
+ * cursor 使用消息 id（对前端不透明）；backward 从最新往前翻，forward 从游标往后翻。
+ * 返回的 items 始终按时间正序排列，便于直接渲染。
+ */
+export const listMessages = async (
+  conversationId: string,
+  query: MessageListQuery,
+): Promise<Page<Message> | null> => {
   const database = await readDatabase();
   const record = database.conversations.find(
     (conversation) => conversation.id === conversationId,
@@ -333,7 +506,38 @@ export const getConversationDetail = async (
     return null;
   }
 
-  const { messages, ...conversation } = record;
+  const messages = record.messages.filter(
+    (message) => message.role !== "system",
+  );
+  const { limit, cursor, direction } = query;
 
-  return { conversation, messages };
+  if (direction === "backward") {
+    const cursorIndex = cursor
+      ? messages.findIndex((message) => message.id === cursor)
+      : messages.length;
+    const endIndex = cursorIndex === -1 ? messages.length : cursorIndex;
+    const startIndex = Math.max(0, endIndex - limit);
+    const items = messages.slice(startIndex, endIndex);
+    const hasMore = startIndex > 0;
+
+    return {
+      items,
+      nextCursor: hasMore && items.length > 0 ? items[0].id : null,
+      hasMore,
+    };
+  }
+
+  const cursorIndex = cursor
+    ? messages.findIndex((message) => message.id === cursor)
+    : -1;
+  const startIndex = cursorIndex + 1;
+  const items = messages.slice(startIndex, startIndex + limit);
+  const hasMore = startIndex + items.length < messages.length;
+
+  return {
+    items,
+    nextCursor:
+      hasMore && items.length > 0 ? items[items.length - 1].id : null,
+    hasMore,
+  };
 };

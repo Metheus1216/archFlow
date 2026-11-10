@@ -6,13 +6,13 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ProjectNode } from "@arch-flow/shared";
 import {
   useDeleteAsset,
-  useDeleteConversation,
   useDeleteFile,
   useDeleteProject,
 } from "@/hooks/use-delete-project-items";
 import { CollapsibleSection } from "./collapsible-section";
 import { ConversationLink } from "./conversation-link";
 import { ItemActionsMenu } from "./item-actions-menu";
+import { NewConversationButton } from "./new-conversation-button";
 
 type SectionItemProps = {
   label: string;
@@ -33,7 +33,6 @@ export const ProjectGroup = ({ project }: { project: ProjectNode }) => {
   const deleteProject = useDeleteProject();
   const deleteFile = useDeleteFile();
   const deleteAsset = useDeleteAsset();
-  const deleteConversation = useDeleteConversation();
   const Chevron = open ? ChevronDown : ChevronRight;
 
   const handleDeleteProject = () => {
@@ -99,20 +98,17 @@ export const ProjectGroup = ({ project }: { project: ProjectNode }) => {
             ))}
           </CollapsibleSection>
 
-          <CollapsibleSection kind="conversations" label="历史会话">
+          <CollapsibleSection
+            kind="conversations"
+            label="历史会话"
+            action={<NewConversationButton projectId={project.id} />}
+          >
             {project.conversations.map((conversation) => (
               <ConversationLink
                 key={conversation.id}
+                projectId={project.id}
                 conversationId={conversation.id}
                 title={conversation.title}
-                onDelete={() =>
-                  deleteConversation.mutate({
-                    projectId: project.id,
-                    conversationId: conversation.id,
-                    name: conversation.title,
-                    isActive: conversation.id === activeConversationId,
-                  })
-                }
               />
             ))}
           </CollapsibleSection>

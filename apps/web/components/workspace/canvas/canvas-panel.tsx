@@ -64,11 +64,9 @@ export const CanvasPanel = ({ conversationId }: { conversationId: string | null 
   const zoom = useWorkspaceStore((state) => state.zoom);
   const increaseZoom = useWorkspaceStore((state) => state.increaseZoom);
   const decreaseZoom = useWorkspaceStore((state) => state.decreaseZoom);
-  const graph = parseMockGraph(
-    conversation.data?.conversation.draftGraph ?? null,
-  );
+  const graph = parseMockGraph(conversation.data?.draftGraph ?? null);
   const hasGraph = graph !== null && graph.nodes.length > 0;
-  const title = conversation.data?.conversation.title ?? "未命名画布";
+  const title = conversation.data?.title ?? "未命名画布";
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col bg-background">

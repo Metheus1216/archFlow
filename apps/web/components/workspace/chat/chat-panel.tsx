@@ -3,19 +3,21 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
-import { Loader2, MoreHorizontal, Send } from "lucide-react";
+import { Loader2, Send } from "lucide-react";
 import { toast } from "sonner";
 import type { Page, ProjectNode } from "@arch-flow/shared";
 import { BrandMark } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useConversation } from "@/hooks/use-conversation";
+import { useMessages } from "@/hooks/use-messages";
 import {
   DEFAULT_PROJECT_NAME,
   projectQueryKey,
   useCreateProject,
 } from "@/hooks/use-projects";
 import { useSendMessage } from "@/hooks/use-send-message";
+import { ChatHeader } from "./chat-header";
 
 /** 输入框默认 2 行（48px），最多撑到 4 行（96px）后出现滚动条。 */
 const DRAFT_MIN_HEIGHT = 48;
@@ -35,12 +37,13 @@ export const ChatPanel = ({ conversationId }: { conversationId: string | null })
   const router = useRouter();
   const queryClient = useQueryClient();
   const conversation = useConversation(conversationId);
+  const messagesQuery = useMessages(conversationId);
   const createProject = useCreateProject();
   const sendMessage = useSendMessage();
-  const messages =
-    conversation.data?.messages.filter((message) => message.role !== "system") ??
-    [];
-  const title = conversation.data?.conversation.title ?? "架构会话";
+  const messages = messagesQuery.data?.items ?? [];
+  const isLoading = conversation.isPending || messagesQuery.isPending;
+  const isError = conversation.isError || messagesQuery.isError;
+  const error = conversation.error ?? messagesQuery.error;
 
   useEffect(() => {
     const textarea = draftRef.current;
@@ -146,30 +149,7 @@ export const ChatPanel = ({ conversationId }: { conversationId: string | null })
 
   return (
     <section className="flex h-full min-h-0 min-w-0 flex-col border-r border-border bg-background">
-      <header className="shrink-0 border-b border-border px-5 py-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
-            <span className="size-1.5 rounded-full bg-success" />
-            架构会话
-          </div>
-          <Button variant="ghost" size="icon-sm" aria-label="更多操作">
-            <MoreHorizontal className="size-4" strokeWidth={1.75} />
-          </Button>
-        </div>
-
-        <h1 className="mt-2 truncate text-xl font-semibold tracking-tight">
-          {title}
-        </h1>
-
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
-            {messages.length} 条消息
-          </span>
-          <span className="rounded-full border border-border px-2 py-0.5 text-[10px] text-muted-foreground">
-            Mock 数据
-          </span>
-        </div>
-      </header>
+      <ChatHeader conversation={conversation.data ?? null} />
 
       <div className="arch-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-6">
         {!conversationId && (
@@ -182,29 +162,32 @@ export const ChatPanel = ({ conversationId }: { conversationId: string | null })
           </div>
         )}
 
-        {conversationId && conversation.isPending && (
+        {conversationId && isLoading && (
           <div className="flex items-center justify-center gap-2 text-[11px] text-muted-foreground">
             <Loader2 className="size-3.5 animate-spin" strokeWidth={1.75} />
             正在加载会话…
           </div>
         )}
 
-        {conversationId && conversation.isError && (
+        {conversationId && isError && (
           <div className="flex flex-col items-center gap-3 text-center">
             <p className="text-[11px] text-muted-foreground">
-              会话加载失败：{conversation.error.message}
+              会话加载失败：{error?.message ?? "未知错误"}
             </p>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => conversation.refetch()}
+              onClick={() => {
+                void conversation.refetch();
+                void messagesQuery.refetch();
+              }}
             >
               重试
             </Button>
           </div>
         )}
 
-        {conversation.data && messages.length === 0 && (
+        {conversation.data && !isLoading && !isError && messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center px-6 text-center">
             <BrandMark className="size-8 opacity-60" />
             <p className="mt-4 text-sm font-medium">从一个约束开始</p>

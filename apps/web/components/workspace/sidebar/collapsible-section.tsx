@@ -21,12 +21,14 @@ type SectionKind = keyof typeof SECTION_ICONS;
 type CollapsibleSectionProps = {
   kind: SectionKind;
   label: string;
+  action?: ReactNode;
   children: ReactNode;
 };
 
 export const CollapsibleSection = ({
   kind,
   label,
+  action,
   children,
 }: CollapsibleSectionProps) => {
   const [open, setOpen] = useState(true);
@@ -35,22 +37,27 @@ export const CollapsibleSection = ({
 
   return (
     <div>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-        className="group/section flex h-7 w-full items-center gap-2 rounded-md px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
-        <span className="truncate">{label}</span>
-        <Chevron
-          className={cn(
-            "size-3 shrink-0 transition-opacity",
-            open ? "opacity-0 group-hover/section:opacity-100" : "opacity-100",
-          )}
-          strokeWidth={1.75}
-        />
-      </button>
+      <div className="group/section flex h-7 w-full items-center rounded-md px-2.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground">
+        <button
+          type="button"
+          aria-expanded={open}
+          onClick={() => setOpen((value) => !value)}
+          className="flex min-w-0 flex-1 items-center gap-2 self-stretch text-left"
+        >
+          <Icon className="size-3.5 shrink-0" strokeWidth={1.75} />
+          <span className="truncate">{label}</span>
+          <Chevron
+            className={cn(
+              "size-3 shrink-0 transition-opacity",
+              open ? "opacity-0 group-hover/section:opacity-100" : "opacity-100",
+            )}
+            strokeWidth={1.75}
+          />
+        </button>
+        {action && (
+          <div className="ml-1 flex shrink-0 items-center">{action}</div>
+        )}
+      </div>
       {open && <div className="space-y-0.5">{children}</div>}
     </div>
   );

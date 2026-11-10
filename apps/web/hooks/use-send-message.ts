@@ -3,11 +3,13 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   MockSendMessageResult,
-  type ConversationDetail,
+  type Message,
+  type Page,
   type SendMessageInput,
 } from "@arch-flow/shared";
 import { requestApi } from "@/lib/api-client";
 import { conversationQueryKey } from "./use-conversation";
+import { messagesQueryKey } from "./use-messages";
 import { projectQueryKey } from "./use-projects";
 
 type SendMessageVariables = SendMessageInput & {
@@ -28,16 +30,19 @@ export const useSendMessage = () => {
         },
       ),
     onSuccess: ({ message }, { conversationId }) => {
-      queryClient.setQueryData<ConversationDetail>(
-        conversationQueryKey(conversationId),
+      queryClient.setQueryData<Page<Message>>(
+        messagesQueryKey(conversationId),
         (current) =>
           current
-            ? { ...current, messages: [...current.messages, message] }
+            ? { ...current, items: [...current.items, message] }
             : current,
       );
 
       void queryClient.invalidateQueries({
         queryKey: conversationQueryKey(conversationId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: messagesQueryKey(conversationId),
       });
       void queryClient.invalidateQueries({ queryKey: projectQueryKey });
     },

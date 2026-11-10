@@ -60,9 +60,10 @@ export const MockFileRecord = FileBrief.extend({
 });
 export type MockFileRecord = z.infer<typeof MockFileRecord>;
 
-/** mock 库中的架构资产：在 AssetBrief 上补 projectId 便于按项目聚合。 */
+/** mock 库中的架构资产：在 AssetBrief 上补 projectId 与固化时的画布快照。 */
 export const MockAssetRecord = AssetBrief.extend({
   projectId: Id,
+  graphData: MockGraph.nullable().default(null),
 });
 export type MockAssetRecord = z.infer<typeof MockAssetRecord>;
 
@@ -74,13 +75,6 @@ export const MockDatabase = z.object({
   conversations: z.array(MockConversationRecord),
 });
 export type MockDatabase = z.infer<typeof MockDatabase>;
-
-/** GET /api/mock/conversations/:id 的响应数据。 */
-export const ConversationDetail = z.object({
-  conversation: Conversation,
-  messages: z.array(Message),
-});
-export type ConversationDetail = z.infer<typeof ConversationDetail>;
 
 /**
  * POST /api/mock/conversations/:id/messages 的响应数据。

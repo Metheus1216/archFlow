@@ -9,7 +9,7 @@
 
 ### ✅ MVP 必须要做的功能：
 1. **Auth 认证**：邮箱密码登录、注册，基于 Redis 的双 Token 无感刷新。
-2. **侧边栏管理**：新建项目、项目树渲染；当无项目时显示全局引导页（Empty State）。
+2. **侧边栏管理**：新建项目、项目树渲染，支持新建 / 重命名 / 删除会话，以及删除项目、知识库文件与资产；当无项目时显示全局引导页（Empty State）。
 3. **Agent 对话**：原生 SSE 流式输出，大模型基于约束推演方案，并抛出交互卡片。
 4. **卡片交互**：用户点选卡片（支持自定义输入）后原地变灰，Agent 继续推流。
 5. **React Flow 画布**：渲染图数据，支持拖拽、Dagre 自动布局、防抖乐观锁保存。
@@ -129,7 +129,7 @@ arch-flow/
 
 冷启动与空状态：无项目返回空列表（`items: []`），前端渲染引导页；有项目则拉取 ProjectNode 树，并自动加载最近活跃的会话。
 
-新建项目与会话：点击“新建项目”调 POST /api/v1/projects，成功后自动调 POST /api/v1/projects/:projectId/conversations 创建首个空会话。
+新建项目与会话：点击“新建项目”调 POST /api/v1/projects，成功后自动调 POST /api/v1/projects/:projectId/conversations 创建首个空会话；进入项目后，侧边栏“历史会话”右侧的 + 也会调用该接口为新会话创建空白画布。
 
 SSE 流式推演：POST /api/v1/conversations/:conversationId/messages 返回 202 + runId，再用 GET /api/v1/runs/:runId/stream 取流；收到 run-start 建空气泡；依次接收 status、text-delta、graph 实时渲染；最后 done + [DONE] 结束。断线时用 `Last-Event-ID` 续传；缓冲失效后服务端按 `runId` 查库合成快照重放，前端再拉消息列表校准。
 
