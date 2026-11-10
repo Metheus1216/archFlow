@@ -3,11 +3,11 @@
 import { Moon, Sun } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-type ThemeToggleProps = {
+export type ThemeToggleProps = {
   className?: string;
 };
 
-const ThemeToggle = ({ className }: ThemeToggleProps) => {
+export const ThemeToggle = ({ className }: ThemeToggleProps) => {
   const handleToggle = () => {
     const isDark = document.documentElement.classList.toggle("dark");
     document.documentElement.style.colorScheme = isDark ? "dark" : "light";
@@ -29,6 +29,3 @@ const ThemeToggle = ({ className }: ThemeToggleProps) => {
     </button>
   );
 };
-
-export { ThemeToggle };
-export type { ThemeToggleProps };

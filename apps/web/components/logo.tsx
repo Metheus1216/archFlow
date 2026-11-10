@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 
-type BrandMarkProps = {
+export type BrandMarkProps = {
   className?: string;
   tone?: "auto" | "light" | "dark";
 };
@@ -24,7 +24,7 @@ const Sparkle = ({ className }: { className?: string }) => (
   </svg>
 );
 
-const BrandMark = ({ className, tone = "auto" }: BrandMarkProps) => (
+export const BrandMark = ({ className, tone = "auto" }: BrandMarkProps) => (
   <span
     className={cn(
       "inline-flex size-7 shrink-0 items-center justify-center rounded-md",
@@ -37,6 +37,3 @@ const BrandMark = ({ className, tone = "auto" }: BrandMarkProps) => (
     <Sparkle className="size-1/2" />
   </span>
 );
-
-export { BrandMark };
-export type { BrandMarkProps };

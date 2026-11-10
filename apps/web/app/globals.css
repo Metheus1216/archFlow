@@ -128,6 +128,14 @@
     border-color: var(--border);
   }
 
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="menuitem"]:not([data-disabled]),
+  [role="menuitemcheckbox"]:not([data-disabled]),
+  [role="menuitemradio"]:not([data-disabled]) {
+    cursor: pointer;
+  }
+
   html,
   body {
     height: 100%;
@@ -208,21 +216,35 @@
     );
   }
 
-  .scrollbar-thin {
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
+  /*
+   * Chromium 一旦看到 scrollbar-width / scrollbar-color 就会切回原生滚动条，
+   * 并忽略下面的 ::-webkit-scrollbar 规则（自带首尾箭头按钮）。
+   * 因此标准属性只给不支持 ::-webkit-scrollbar 的浏览器（如 Firefox）。
+   */
+  @supports not selector(::-webkit-scrollbar) {
+    .arch-scrollbar {
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
   }
 
-  .scrollbar-thin::-webkit-scrollbar {
+  .arch-scrollbar::-webkit-scrollbar {
     width: 6px;
     height: 6px;
   }
 
-  .scrollbar-thin::-webkit-scrollbar-track {
+  .arch-scrollbar::-webkit-scrollbar-track {
     background: transparent;
   }
 
-  .scrollbar-thin::-webkit-scrollbar-thumb {
+  /* 只保留中间的滑块，隐藏滚动条首尾的箭头按钮。 */
+  .arch-scrollbar::-webkit-scrollbar-button {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  .arch-scrollbar::-webkit-scrollbar-thumb {
     border-radius: 999px;
     background-color: var(--border);
   }

@@ -25,7 +25,7 @@ type ExportMenuProps = {
   defaultOpen?: boolean;
 };
 
-const ExportMenu = ({ defaultOpen = false }: ExportMenuProps) => (
+export const ExportMenu = ({ defaultOpen = false }: ExportMenuProps) => (
   <DropdownMenu defaultOpen={defaultOpen}>
     <DropdownMenuTrigger asChild>
       <Button variant="outline" size="sm" className="group">
@@ -47,5 +47,3 @@ const ExportMenu = ({ defaultOpen = false }: ExportMenuProps) => (
     </DropdownMenuContent>
   </DropdownMenu>
 );
-
-export { ExportMenu };

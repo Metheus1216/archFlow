@@ -20,7 +20,7 @@ import { setSessionHint } from "@/lib/session";
 
 type FormMode = "login" | "register";
 
-const LoginForm = () => {
+export const LoginForm = () => {
   const router = useRouter();
   const [mode, setMode] = useState<FormMode>("login");
   const [showPassword, setShowPassword] = useState(false);
@@ -28,7 +28,7 @@ const LoginForm = () => {
   const isRegister = mode === "register";
   const isDev = process.env.NODE_ENV !== "production";
 
-  const enterWorkspace = () => {
+  const enterApp = () => {
     setSessionHint();
     router.replace("/workspace");
   };
@@ -41,12 +41,12 @@ const LoginForm = () => {
       return;
     }
 
-    enterWorkspace();
+    enterApp();
   };
 
   const handleGithubLogin = () => {
     if (isDev) {
-      enterWorkspace();
+      enterApp();
     }
   };
 
@@ -223,14 +223,14 @@ const LoginForm = () => {
             <div className="min-w-0">
               <p className="text-[11px] font-medium">开发环境</p>
               <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
-                跳过真实认证，直接进入工作台
+                跳过真实认证，直接进入应用
               </p>
             </div>
             <Button
               variant="secondary"
               size="sm"
               className="shrink-0"
-              onClick={enterWorkspace}
+              onClick={enterApp}
             >
               <Zap className="size-3" strokeWidth={1.75} />
               一键登录
@@ -269,5 +269,3 @@ const LoginForm = () => {
     </div>
   );
 };
-
-export { LoginForm };

@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { clearSessionHint } from "@/lib/session";
 
-const DevLogout = () => {
+export const DevLogout = () => {
   const router = useRouter();
 
   if (process.env.NODE_ENV === "production") {
@@ -28,5 +28,3 @@ const DevLogout = () => {
     </button>
   );
 };
-
-export { DevLogout };

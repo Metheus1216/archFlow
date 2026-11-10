@@ -159,3 +159,6 @@ Thumbs.db
 
 # Local docker data (named volumes are managed by Docker; keep stray dumps out)
 /docker-data/
+
+# 开发期 mock 数据（Next route handler 落盘）
+apps/web/.mock/

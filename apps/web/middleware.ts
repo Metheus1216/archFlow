@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_HINT_COOKIE } from "@/lib/session";
 
-const PROTECTED_PATHS = ["/workspace", "/welcome"];
+const PROTECTED_PATHS = ["/", "/workspace"];
 
 export const middleware = (request: NextRequest) => {
   const { pathname } = request.nextUrl;
@@ -22,5 +22,5 @@ export const middleware = (request: NextRequest) => {
 };
 
 export const config = {
-  matcher: ["/login", "/welcome", "/workspace", "/workspace/:path*"],
+  matcher: ["/", "/login", "/workspace", "/workspace/:path*"],
 };

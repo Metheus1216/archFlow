@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import { Toaster } from "@/components/ui/sonner";
+import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -24,7 +26,10 @@ const RootLayout = ({ children }: { children: ReactNode }) => (
       <script dangerouslySetInnerHTML={{ __html: themeScript }} />
     </head>
     <body className="min-h-dvh bg-background text-foreground antialiased">
-      {children}
+      <Providers>
+        {children}
+        <Toaster position="bottom-right" offset={{ bottom: 24, right: 24 }} />
+      </Providers>
     </body>
   </html>
 );

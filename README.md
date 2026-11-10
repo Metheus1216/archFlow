@@ -32,7 +32,8 @@
 ### 🎨 前端 (apps/web)
 - **核心框架**：Next.js (App Router) —— 利用 SSR 做首屏骨架与中间件鉴权。
 - **样式与 UI**：Tailwind CSS + Shadcn/ui + 鸿蒙字体。
-- **状态管理**：Zustand (客户端状态) + TanStack Query (服务端状态与缓存)。
+- **状态管理**：Zustand (客户端状态) + TanStack Query (服务端状态与缓存、乐观更新)。
+- **分屏布局**：`react-resizable-panels` (会话区与画布区可拖拽调节宽度，布局比例通过 `autoSaveId` 自动持久化)。
 - **核心画布**：React Flow (`@xyflow/react`) + Dagre (计算节点坐标自动布局)。
 - **流式通信**：`@microsoft/fetch-event-source` (基于 fetch，可带 Authorization 与 `Last-Event-ID`，支持断线重试；不手写 SSE 解析，无 AI SDK 依赖)。
 - **契约校验**：Zod (表单验证 + SSE 事件流解析校验)。
@@ -71,17 +72,22 @@ arch-flow/
 ├── apps/
 │   ├── web/                        # 【Next.js 前端】
 │   │   ├── app/                    # 页面路由 (登录、工作台)
-│   │   ├── components/             
-│   │   │   ├── canvas/             # React Flow 画布组件
-│   │   │   ├── chat/               # 聊天区、约束卡片
-│   │   │   ├── sidebar/            # 侧边栏、项目树
+│   │   ├── components/
+│   │   │   ├── workspace/
+│   │   │   │   ├── sidebar/        # 侧边栏、项目树、会话列表
+│   │   │   │   ├── chat/           # 聊天区、约束卡片
+│   │   │   │   ├── canvas/         # React Flow 画布
+│   │   │   │   └── workspace-view.tsx  # 可拖拽分屏容器
+│   │   │   ├── project/            # 项目创建入口
 │   │   │   └── ui/                 # Shadcn/ui 基础组件
-│   │   ├── lib/                    
+│   │   ├── hooks/                  # TanStack Query 数据钩子
+│   │   ├── lib/
 │   │   │   ├── sse-client.ts       # ★ SSE 连接封装 (@microsoft/fetch-event-source)
-│   │   │   ├── api.ts              # 全局 Fetch 拦截器与 TanStack Query
-│   │   │   └── store.ts            # Zustand 全局状态
+│   │   │   ├── api-client.ts       # 全局 Fetch 封装与契约校验
+│   │   │   └── mock-*.ts           # 本地 Mock 数据层
+│   │   ├── store/                  # Zustand 全局状态
 │   │   └── package.json
-│   └── server/                        # 【NestJS 后端】
+│   └── api/                        # 【NestJS 后端】
 │       ├── src/
 │       │   ├── modules/            
 │       │   │   ├── auth/           # 认证 (双 Token)

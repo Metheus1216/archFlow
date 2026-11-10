@@ -12,7 +12,7 @@ import { Toaster as Sonner, type ToasterProps } from "sonner";
 
 type Theme = NonNullable<ToasterProps["theme"]>;
 
-const Toaster = ({ ...props }: ToasterProps) => {
+export const Toaster = ({ ...props }: ToasterProps) => {
   const [theme, setTheme] = useState<Theme>("dark");
 
   useEffect(() => {
@@ -53,5 +53,3 @@ const Toaster = ({ ...props }: ToasterProps) => {
     />
   );
 };
-
-export { Toaster };

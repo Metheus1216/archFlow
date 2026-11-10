@@ -32,6 +32,7 @@
 
 ## 4. 前后端技术栈与规范
 - **前端**：Next.js (App Router), Tailwind CSS, Shadcn/ui。**严禁使用 `@ai-sdk/react` 的 `useChat` 钩子**；SSE 消费统一使用 `@microsoft/fetch-event-source` 封装（参考 `apps/web/lib/sse-client.ts`），**不得使用原生 `EventSource`**。
+- **导出规范（前端）**：所有导出必须在声明处使用命名式导出（`export const X = ...` / `export type X = ...`），不得在文件末尾集中写 `export { X }`，禁止 `export default`；仅 Next.js / 构建工具约定必须默认导出的文件（如 `page.tsx`、`layout.tsx`、`next.config.ts`）例外。
 - **后端**：NestJS (ESM), TypeORM。Controller 内部不要写大量 `try-catch`，抛出异常交由全局过滤器处理。
 - **验证**：所有 Controller 的入参必须使用 `ZodValidationPipe` 校验。
 - **错误处理**：统一使用 `ApiResponseSchema` 外壳返回 `{ code, message, data, errors?, traceId }`；失败时 `data` 为 `null`，`code` 取 `ERROR_CODES` 的大写常量。
