@@ -5,9 +5,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { Page, ProjectNode } from "@arch-flow/shared";
 import { requestApiVoid } from "@/lib/api-client";
-import { conversationQueryKey } from "./use-conversation";
-import { messagesQueryKey } from "./use-messages";
-import { projectQueryKey } from "./use-projects";
+import {
+  conversationQueryKey,
+  messagesQueryKey,
+  projectQueryKey,
+} from "@/lib/query-keys";
 
 type OptimisticDeleteOptions<TVariables extends { projectId: string }> = {
   mutationFn: (variables: TVariables) => Promise<void>;
@@ -66,11 +68,9 @@ const useOptimisticDelete = <TVariables extends { projectId: string }>({
       toast.error(error.message);
     },
     onSuccess: (_data, variables) => {
+      // 乐观 patch 已经是最终结果；删除成功后不再 refetch 整棵项目树。
       toast.success(successMessage(variables));
       onDeleted?.(variables);
-    },
-    onSettled: () => {
-      void queryClient.invalidateQueries({ queryKey: projectQueryKey });
     },
   });
 };

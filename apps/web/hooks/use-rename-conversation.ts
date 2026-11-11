@@ -2,14 +2,13 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import {
+import type {
   Conversation,
-  type Page,
-  type ProjectNode,
+  Page,
+  ProjectNode,
 } from "@arch-flow/shared";
 import { requestApi } from "@/lib/api-client";
-import { conversationQueryKey } from "./use-conversation";
-import { projectQueryKey } from "./use-projects";
+import { conversationQueryKey, projectQueryKey } from "@/lib/query-keys";
 
 type RenameConversationVariables = {
   conversationId: string;
@@ -22,9 +21,8 @@ export const useRenameConversation = () => {
 
   return useMutation<Conversation, Error, RenameConversationVariables>({
     mutationFn: ({ conversationId, title }) =>
-      requestApi(
+      requestApi<Conversation>(
         `/api/mock/conversations/${conversationId}`,
-        Conversation,
         {
           method: "PATCH",
           body: JSON.stringify({ title }),
@@ -60,8 +58,8 @@ export const useRenameConversation = () => {
         conversation,
       );
 
+      // 项目树和会话详情都已在本地更新，不再触发额外的项目列表请求。
       toast.success("会话已重命名");
-      void queryClient.invalidateQueries({ queryKey: projectQueryKey });
     },
     onError: (error) => {
       toast.error(error.message);

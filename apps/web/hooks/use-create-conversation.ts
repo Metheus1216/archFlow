@@ -3,14 +3,14 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import {
+import type {
   Conversation,
-  type CreateConversationInput,
-  type Page,
-  type ProjectNode,
+  CreateConversationInput,
+  Page,
+  ProjectNode,
 } from "@arch-flow/shared";
 import { requestApi } from "@/lib/api-client";
-import { projectQueryKey } from "./use-projects";
+import { projectQueryKey } from "@/lib/query-keys";
 
 type CreateConversationVariables = CreateConversationInput & {
   projectId: string;
@@ -23,9 +23,8 @@ export const useCreateConversation = () => {
 
   return useMutation<Conversation, Error, CreateConversationVariables>({
     mutationFn: ({ projectId, ...input }) =>
-      requestApi(
+      requestApi<Conversation>(
         `/api/mock/projects/${projectId}/conversations`,
-        Conversation,
         {
           method: "POST",
           body: JSON.stringify(input),
@@ -56,7 +55,7 @@ export const useCreateConversation = () => {
           : current,
       );
 
-      void queryClient.invalidateQueries({ queryKey: projectQueryKey });
+      // 会话已写入项目树缓存；跳转由 RSC 负责，不再立即 refetch 项目列表。
       toast.success("已创建新会话");
       router.push(`/workspace?conversationId=${conversation.id}`);
     },

@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./constants/error-codes": {
+      "types": "./dist/constants/error-codes.d.ts",
+      "import": "./dist/constants/error-codes.js"
     }
   },
   "files": ["dist"],

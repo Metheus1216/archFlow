@@ -1,11 +1,9 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Conversation } from "@arch-flow/shared";
+import type { Conversation } from "@arch-flow/shared";
 import { requestApi } from "@/lib/api-client";
-
-export const conversationQueryKey = (conversationId: string) =>
-  ["conversation", conversationId] as const;
+import { conversationQueryKey } from "@/lib/query-keys";
 
 export const useConversation = (conversationId: string | null) =>
   useQuery({
@@ -15,9 +13,8 @@ export const useConversation = (conversationId: string | null) =>
         throw new Error("缺少 conversationId");
       }
 
-      return requestApi(
+      return requestApi<Conversation>(
         `/api/mock/conversations/${conversationId}`,
-        Conversation,
       );
     },
     enabled: conversationId !== null,

@@ -1,18 +1,13 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  PageSchema,
-  ProjectNode as projectNodeSchema,
-  type CreateProjectInput,
-  type Page,
-  type ProjectNode,
+import type {
+  CreateProjectInput,
+  Page,
+  ProjectNode,
 } from "@arch-flow/shared";
 import { requestApi } from "@/lib/api-client";
-
-const projectPageSchema = PageSchema(projectNodeSchema);
-
-export const projectQueryKey = ["projects"] as const;
+import { projectQueryKey } from "@/lib/query-keys";
 
 export const DEFAULT_PROJECT_NAME = "新架构项目";
 
@@ -66,7 +61,7 @@ const buildOptimisticProject = (input: CreateProjectInput): ProjectNode => {
 export const useProjects = (initialProjects?: ProjectNode[]) =>
   useQuery({
     queryKey: projectQueryKey,
-    queryFn: async () => requestApi("/api/mock/projects", projectPageSchema),
+    queryFn: async () => requestApi<Page<ProjectNode>>("/api/mock/projects"),
     initialData: initialProjects
       ? { items: initialProjects, nextCursor: null, hasMore: false }
       : undefined,
@@ -81,7 +76,7 @@ export const useCreateProject = (callbacks: CreateProjectCallbacks = {}) => {
 
   return useMutation<ProjectNode, Error, CreateProjectInput, CreateProjectContext>({
     mutationFn: async (input) =>
-      requestApi("/api/mock/projects", projectNodeSchema, {
+      requestApi<ProjectNode>("/api/mock/projects", {
         method: "POST",
         body: JSON.stringify(input),
       }),
@@ -119,7 +114,8 @@ export const useCreateProject = (callbacks: CreateProjectCallbacks = {}) => {
           : current,
       );
 
-      void queryClient.invalidateQueries({ queryKey: projectQueryKey });
+      // 服务端返回的 project 已包含完整嵌套数据，直接替换乐观项即可；
+      // 这里不再 invalidate，避免创建项目后立刻多打一次 GET。
       callbacks.onCreated?.(project);
     },
   });

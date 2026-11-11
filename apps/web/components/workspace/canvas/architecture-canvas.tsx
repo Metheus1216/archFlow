@@ -7,6 +7,7 @@ import {
   Server,
   Shield,
   ShieldCheck,
+  Workflow,
 } from "lucide-react";
 import type {
   MockGraph,
@@ -45,7 +46,8 @@ export const ArchitectureCanvas = ({ graph }: { graph: MockGraph }) => (
     </svg>
 
     {graph.nodes.map((node) => {
-      const Icon = NODE_ICONS[node.kind];
+      /** 未知 kind 不阻塞整张图，退回通用图标。 */
+      const Icon = NODE_ICONS[node.kind] ?? Workflow;
 
       return (
         <div
