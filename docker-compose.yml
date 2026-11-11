@@ -35,8 +35,12 @@ services:
       retries: 5
 
   minio:
-    image: minio/minio:latest
+    # 官方 minio/minio 已从 Docker Hub 移除；本地开发用 Bitnami legacy 镜像，
+    # 环境变量与启动参数保持 MinIO 原生语义。
+    image: bitnamilegacy/minio:latest
     container_name: archflow-minio
+    # 命名卷默认 root 所有，Bitnami 镜像默认以 1001 运行会写不了 /data。
+    user: "0:0"
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
