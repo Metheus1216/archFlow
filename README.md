@@ -145,12 +145,14 @@ SSE 流式推演：POST /api/v1/conversations/:conversationId/messages 返回 20
 
 🛠️ 五、 快速开始
 1. 环境准备
-确保已安装 Node.js 20+、pnpm 9+ 和 Docker。
+确保已安装 Node.js 20.12+、pnpm 9+ 和 Docker。
 
 2. 启动本地基础设施
 bash
 docker compose up -d
 (将启动 PostgreSQL + pgvector、Redis、MinIO)
+
+> 官方 `minio/minio` 已从 Docker Hub 移除，Compose 改用 `bitnamilegacy/minio:latest`，仅用于本地开发。
 
 3. 安装依赖
 bash
@@ -162,7 +164,11 @@ apps/api/.env (DB URL、JWT_SECRET、Redis 配置、LLM_API_KEY)
 
 apps/web/.env (后端 API 地址)
 
-5. 启动开发环境
+5. 初始化数据库（首次启动或新增迁移后）
+bash
+pnpm db:migrate
+
+6. 启动开发环境
 bash
 pnpm dev          # 前后端一起启动
 pnpm dev:web      # 只启动前端
