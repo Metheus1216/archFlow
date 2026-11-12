@@ -61,6 +61,8 @@
 6. **复杂 Agent 编排**：不引入 LangChain / LangGraph。采用手写状态机 + 原生 Function Calling。
 7. **移动端深度适配**：优先保证桌面端宽屏（Web）体验。
 
+> post-MVP 的 RabbitMQ + Go 文档解析服务规划见 [`架构规划.md`](./架构规划.md)；不改变本文的 MVP 边界，也不意味着现在可以写相关代码。
+
 ------
 
 ## 四、  验收标准 (Acceptance Criteria)

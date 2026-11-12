@@ -7,6 +7,7 @@
 - **契约驱动**：所有前后端的数据结构，必须以 `packages/shared/src/schemas/` 里的 Zod Schema 为唯一真理。严禁手写 Interface 或 `any`。字段长度、格式、枚举取值同样只在这里定义，API 文档不重复数值。
 - **零重型 AI 框架**：`packages/agent` 内必须手写大模型请求和状态机流转。直接使用原生的 OpenAI Node.js SDK，服务端推流使用原生的 SSE（Server-Sent Events），客户端统一用 `@microsoft/fetch-event-source` 消费。
 - **状态外置**：Agent 的记忆（当前收集的约束、当前画布状态）不能只存在内存里，必须通过 `agent_states` 表持久化，以便断点恢复。
+- **服务边界**：MVP 保持模块化单体；post-MVP 只拆一个 Go 文档解析服务，异步任务统一用 RabbitMQ，不引入 BullMQ，不做整体微服务。
 - **多包联动**：Monorepo 的包引用必须使用 `workspace:*`，跨包引用的类型必须来自 `@arch-flow/shared`。
 - **断线恢复以数据库为准**：SSE 断开不终止 run；生成过程中节流写入 `messages.content`，事件缓冲（MVP 进程内存，10 分钟）只用于逐帧重放；缓冲失效时按 `runId` 从 `runs` / `messages` 合成快照重放。
 
@@ -41,12 +42,13 @@
 - **内外键分离**：所有表的主键必须是内部自增的 `BIGINT`（命名为 `id`），对外暴露的必须是 `UUID`（命名为 `uuid`）。
 - **乐观锁**：画布草稿保存（`PUT /api/v1/conversations/:conversationId/draft`）必须带 `baseVersion`，版本不一致必须返回 `409 DRAFT_VERSION_CONFLICT`。
 - **JSONB 应用**：画布数据（API 字段 `graph`；资产列 `graph_data`，会话草稿列 `current_draft_graph`）、消息元数据（`metadata`）、Agent 状态（`constraints_data`）必须使用 `JSONB` 类型存储。
-- **向量检索**：`documents_chunks` 表必须包含 `VECTOR(1536)` 字段，并使用 HNSW 索引。查向量时**必须带上 `project_id` 过滤**，防止跨项目数据污染。
+- **向量检索**：`documents_chunks` 表默认包含 `VECTOR(1536)` 字段，并使用 HNSW 索引。若所选 Embedding 模型不支持 1536 维，必须在灌入数据前统一改 schema，禁止新旧维度混用。查向量时**必须带上 `project_id` 过滤**，防止跨项目数据污染。
 
 ## 6. 严禁修改/生成的功能（MVP 红线）
 - ❌ 不要写 WebSocket 协作代码。
 - ❌ 不要写 PDF / DOCX 的解析逻辑（仅上传存储，不可被 Agent 引用）。图片（`image`）属于 MVP 范围，可上传可解析。
 - ❌ 不要引入 Redis 队列（BullMQ）处理异步任务。
+- ❌ 不要在 MVP 中生成 RabbitMQ / Go 文档解析服务代码；它们是 post-MVP 扩展，见 `specs/架构规划.md`。
 - ❌ 不要使用 LangGraph 或 LangChain。
 
 ## 7. 常用命令
@@ -56,7 +58,7 @@
 - 仅启动前端：`pnpm dev:web`
 - 仅启动后端（连带 agent/db/shared 的 watch）：`pnpm dev:api`
 - 仅启动 agent 包：`pnpm dev:agent`
-- 测试：测试框架待定（Vitest / Jest 未选型），暂不提供 `pnpm test`
+- 测试：Vitest（前后端统一）+ Supertest（后端接口）；尚未接入脚本，接入后提供 `pnpm test`
 
 ---
-*如果对某个具体业务流有疑问，请优先阅读 `specs/数据流.md`、`specs/API文档/`（接口契约）和 `specs/DECISIONS.md`（已定决策），不要自己瞎猜。*
+*如果对某个具体业务流有疑问，请优先阅读 `specs/数据流.md`、`specs/API文档/`（接口契约）、`specs/架构规划.md`（架构边界）和 `specs/待做清单.md`（执行优先级）；工程问题排查见 `specs/DECISIONS.md`，不要自己瞎猜。*

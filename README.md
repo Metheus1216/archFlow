@@ -13,15 +13,15 @@
 3. **Agent 对话**：原生 SSE 流式输出，大模型基于约束推演方案，并抛出交互卡片。
 4. **卡片交互**：用户点选卡片（支持自定义输入）后原地变灰，Agent 继续推流。
 5. **React Flow 画布**：渲染图数据，支持拖拽、Dagre 自动布局、防抖乐观锁保存。
-6. **基础 RAG**：支持上传 `.md` / `.txt` 文件，后端切片存入 `pgvector`，Agent 能基于文档回答。
+6. **基础 RAG**：支持上传 `.md` / `.txt` 文件，后端切片存入 `pgvector`，Agent 能基于文档回答；图片可解析并生成 caption（caption 入 RAG 为 P1）。
 7. **资产与回溯**：保存当前画布为资产；基于历史消息恢复快照或物理复制开启新分支。
 
 ### ❌ MVP 明确**不做**的功能：
-1. **多模态**：不支持图片/PDF/Word 解析（为了不阻塞 Node 主线程）。
-2. **异步队列**：不使用 BullMQ/RabbitMQ，纯靠 Node 异步流直推。
+1. **重格式解析**：PDF / DOCX 仅上传存储、不解析；图片属于 MVP 范围，可上传并解析（以 `specs/mvp.md` 与 API 能力矩阵为准）。
+2. **异步队列**：MVP 不使用 BullMQ / RabbitMQ，纯靠 Node 异步流直推；post-MVP 统一用 RabbitMQ，不引入 BullMQ。
 3. **多人协作**：不引入 WebSocket/Yjs 实时同步。
 4. **复杂 Agent 框架**：不引入 LangChain/LangGraph，采用手写状态机 + 原生 Function Calling。
-5. **微服务拆分**：所有业务逻辑放在 NestJS 单体中。
+5. **微服务拆分**：MVP 所有业务逻辑放在 NestJS 单体；post-MVP 只拆一个 Go 文档解析服务，不做整体微服务。
 
 ---
 
@@ -42,15 +42,15 @@
 - **核心框架**：NestJS (ESM 规范) + TypeORM (ORM)。
 - **数据库**：PostgreSQL + pgvector (存关系型业务数据与向量检索)。
 - **缓存与凭证**：Redis (存双 Token 无感刷新状态、防刷限流)。
-- **对象存储**：MinIO (兼容 S3 协议，存用户上传的 MD/TXT 文件)。
-- **模型接入**：原生 OpenAI/Anthropic Node.js SDK (直接调官方接口，无任何中间层封装)。
+- **对象存储**：MinIO (兼容 S3 协议，存用户上传的文本 / 图片 / PDF / DOCX 文件)。
+- **模型接入**：OpenAI 兼容 Node.js SDK 直连模型接口；主链路用 DeepSeek chat，图片理解与 Embedding 用千问；`packages/agent/src/llm/` 做 Provider 适配，不绑定单一供应商。
 - **接口安全**：全局 Zod 验证管道、全局异常过滤器 (ErrorResponse)、TraceId 链路追踪。
 
 ### 🧠 Agent 核心引擎 (packages/agent)
 - **流程控制**：自研手写 `while` 循环 / 状态机 (完全抛弃 LangChain/LangGraph)。
 - **交互机制**：原生 Function Calling + Zod 强约束输出 (确保大模型返回 100% 合法的 JSON)。
 - **干预机制**：基于 `interrupt` 理念的 HITL (Human-in-the-Loop) 强制阻断与断点恢复机制。
-- **记忆压缩**：滑动窗口截断 + `agent_states` 结构化状态注入 (解决大模型中间遗忘问题)。
+- **记忆组织**：滑动窗口截断 + `agent_states` 结构化状态注入；MVP 不做滚动摘要，避免把“记忆”做成不可控的黑盒。
 
 ### 🏗️ 基础设施与工程化 (Infra & DevOps)
 - **包管理与构建**：pnpm Workspaces + Turborepo (Monorepo 架构)。
@@ -61,6 +61,7 @@
   - **反向代理**：Nginx (负责静态资源分发、HTTPS 证书配置、以及为 SSE 配置长连接 `proxy_read_timeout`)。
   - **CI/CD**：GitHub Actions (通过 SSH 自动拉取代码并执行 `docker compose up -d --build`)。
 - **测试体系**：Vitest (前后端统一) + Supertest (后端接口测试)。
+- **未来扩展（post-MVP）**：RabbitMQ + 一个 Go 文档解析服务；只拆专用计算服务，不引入 BullMQ，不做整体微服务。
 
 ---
 
@@ -172,4 +173,4 @@ pnpm dev:api      # 只启动后端（连带 agent/db/shared 的 watch）
 
 契约驱动：所有接口字段必须先改 packages/shared 里的 Zod Schema，再改代码。
 
-决策记录：所有架构演进、技术选型原因，记录到 specs/DECISIONS.md 中。
+决策记录：工程问题记录到 `specs/DECISIONS.md`，架构演进与服务边界记录到 `specs/架构规划.md`，可执行事项记录到 `specs/待做清单.md`。
