@@ -31,7 +31,7 @@
 
 ### 🎨 前端 (apps/web)
 - **核心框架**：Next.js (App Router) —— 利用 SSR 做首屏骨架与中间件鉴权。
-- **样式与 UI**：Tailwind CSS + Shadcn/ui + 鸿蒙字体。
+- **样式与 UI**：Tailwind CSS + Shadcn/ui + 系统字体栈。
 - **状态管理**：Zustand (客户端状态) + TanStack Query (服务端状态与缓存、乐观更新)。
 - **分屏布局**：`react-resizable-panels` (会话区与画布区可拖拽调节宽度，布局比例通过 `autoSaveId` 自动持久化)。
 - **核心画布**：React Flow (`@xyflow/react`) + Dagre (计算节点坐标自动布局)。
@@ -146,12 +146,14 @@ SSE 流式推演：POST /api/v1/conversations/:conversationId/messages 返回 20
 
 🛠️ 五、 快速开始
 1. 环境准备
-确保已安装 Node.js 20+、pnpm 9+ 和 Docker。
+确保已安装 Node.js 20.12+、pnpm 9+ 和 Docker。
 
 2. 启动本地基础设施
 bash
 docker compose up -d
 (将启动 PostgreSQL + pgvector、Redis、MinIO)
+
+> 官方 `minio/minio` 已从 Docker Hub 移除，Compose 改用 `bitnamilegacy/minio:latest`，仅用于本地开发。
 
 3. 安装依赖
 bash
@@ -163,11 +165,19 @@ apps/api/.env (DB URL、JWT_SECRET、Redis 配置、LLM_API_KEY)
 
 apps/web/.env (后端 API 地址)
 
-5. 启动开发环境
+5. 初始化数据库（首次启动或新增迁移后）
+bash
+pnpm db:migrate
+
+6. 启动开发环境
 bash
 pnpm dev          # 前后端一起启动
 pnpm dev:web      # 只启动前端
 pnpm dev:api      # 只启动后端（连带 agent/db/shared 的 watch）
+
+> 本地 production 预览（Mock API）：
+> `pnpm --filter @arch-flow/web build`，然后 `MOCK_API=1 pnpm --filter @arch-flow/web start`。
+> PowerShell 用 `$env:MOCK_API='1'; pnpm --filter @arch-flow/web start`；线上部署不要设置 `MOCK_API`。
 👥 六、 团队协作规范
 主干开发：main 分支始终可运行。每次 push 走 PR，至少 1 人 Review 才能合并。
 

@@ -9,11 +9,11 @@ import type { Page, ProjectNode } from "@arch-flow/shared";
 import { BrandMark } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { projectQueryKey } from "@/lib/query-keys";
 import { useConversation } from "@/hooks/use-conversation";
 import { useMessages } from "@/hooks/use-messages";
 import {
   DEFAULT_PROJECT_NAME,
-  projectQueryKey,
   useCreateProject,
 } from "@/hooks/use-projects";
 import { useSendMessage } from "@/hooks/use-send-message";

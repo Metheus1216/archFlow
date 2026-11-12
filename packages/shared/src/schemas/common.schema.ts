@@ -124,7 +124,7 @@ export const GraphInput = Graph.superRefine((graph, ctx) => {
 });
 export type GraphInput = z.infer<typeof GraphInput>;
 
-type GraphError = {
+export type GraphError = {
   httpStatus: 413 | 422;
   errorCode: "GRAPH_TOO_LARGE" | "GRAPH_INVALID";
 };

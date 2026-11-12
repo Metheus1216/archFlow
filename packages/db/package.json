@@ -16,6 +16,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "dev": "tsc -p tsconfig.json --watch --preserveWatchOutput",
+    "migrate": "pnpm run build && node dist/migrate.js",
     "lint": "eslint .",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

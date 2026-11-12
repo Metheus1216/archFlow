@@ -8,7 +8,13 @@ import {
   type FieldError,
 } from "@arch-flow/shared";
 
-export const MOCK_ENABLED = process.env.NODE_ENV !== "production";
+/**
+ * 开发环境默认开启；production 默认关闭。
+ * 本地做 production 预览时显式设置 MOCK_API=1 再 next start，
+ * 不要把这个变量带到线上部署。
+ */
+export const MOCK_ENABLED =
+  process.env.NODE_ENV !== "production" || process.env.MOCK_API === "1";
 
 export const mockOk = <T>(
   schema: z.ZodType<T>,
@@ -43,7 +49,11 @@ export const mockError = (
   );
 
 export const mockDisabled = (): NextResponse =>
-  mockError(404, ERROR_CODES.BAD_REQUEST, "Mock API 仅在开发环境可用");
+  mockError(
+    404,
+    ERROR_CODES.BAD_REQUEST,
+    "Mock API 未启用（本地 production 预览请设置 MOCK_API=1）",
+  );
 
 /** 删除成功：契约规定返回 204 No Content，仅通过响应头暴露 traceId。 */
 export const mockNoContent = (): NextResponse =>
