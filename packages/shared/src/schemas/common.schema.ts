@@ -44,6 +44,7 @@ export type CardStatus = z.infer<typeof CardStatus>;
 export const RunStatus = z.enum([
   "queued",
   "running",
+  "waiting_input",
   "succeeded",
   "failed",
   "canceled",
@@ -53,18 +54,66 @@ export type RunStatus = z.infer<typeof RunStatus>;
 export const FinishReason = z.enum(["stop", "length", "canceled", "error"]);
 export type FinishReason = z.infer<typeof FinishReason>;
 
-/* ───────────────────────── 图（§7.6 仅约束传输形态） ───────────────────────── */
+/* ───────────────────────── 图（§7.6） ───────────────────────── */
 
+/** 图规模硬上限：节点 / 边数量，超过即 422。 */
+export const GRAPH_MAX_NODES = 200;
+export const GRAPH_MAX_EDGES = 400;
+
+/** 图序列化上限：按 UTF-8 字节计，超过即 413。 */
 export const GRAPH_MAX_BYTES = 512 * 1024;
+
+/** 嵌套深度兜底：结构化后正常图不会触发，保留防止未来加嵌套字段。 */
 export const GRAPH_MAX_DEPTH = 6;
 
-/** 图数据：nodes / edges 内部结构 TBD，服务端视为不透明 JSON。 */
-export const Graph = z.looseObject({
+/** 节点类型白名单（P0-13）：先覆盖 MVP 的 7 类，只增不改语义。 */
+export const NodeType = z.enum([
+  "client",
+  "gateway",
+  "auth",
+  "service",
+  "worker",
+  "database",
+  "cache",
+]);
+export type NodeType = z.infer<typeof NodeType>;
+
+/** 图节点：坐标不入库，布局由前端 Dagre 计算。 */
+export const GraphNode = z.strictObject({
+  id: Id,
+  type: NodeType,
+  label: z.string().trim().min(1).max(120),
+  description: z.string().trim().max(500).optional(),
+});
+export type GraphNode = z.infer<typeof GraphNode>;
+
+/** 图边：source / target 必须指向同一张图里的节点。 */
+export const GraphEdge = z.strictObject({
+  id: Id,
+  source: Id,
+  target: Id,
+  label: z.string().trim().max(120).optional(),
+});
+export type GraphEdge = z.infer<typeof GraphEdge>;
+
+/** 架构图：生成、草稿、资产共用的结构；请求侧再走 GraphInput。 */
+export const Graph = z.strictObject({
+  nodes: z.array(GraphNode).max(GRAPH_MAX_NODES),
+  edges: z.array(GraphEdge).max(GRAPH_MAX_EDGES),
+  version: z.number().int().positive().optional(),
+});
+export type Graph = z.infer<typeof Graph>;
+
+/**
+ * 旧版图容器（P0-16 切换画布前兼容）：会话草稿与消息快照仍可能是带坐标的 mock 图。
+ * 只用于读取；新写入一律用 Graph。
+ */
+export const LooseGraph = z.looseObject({
   nodes: z.array(z.unknown()),
   edges: z.array(z.unknown()),
   version: z.number().int().positive().optional(),
 });
-export type Graph = z.infer<typeof Graph>;
+export type LooseGraph = z.infer<typeof LooseGraph>;
 
 const encoder = new TextEncoder();
 
@@ -102,7 +151,13 @@ export const GRAPH_INVALID_ERROR = {
   errorCode: "GRAPH_INVALID",
 } as const;
 
-/** 入参图：在 Graph 之上叠加 §7.6 的大小与深度硬约束。 */
+/**
+ * 入参图：结构 + 规模 + 引用完整性。
+ *
+ * 错误归属按原因、不按资源：
+ * - 序列化超过 GRAPH_MAX_BYTES → 413 GRAPH_TOO_LARGE
+ * - 结构、重复 id、悬空边、自环 → 422 GRAPH_INVALID
+ */
 export const GraphInput = Graph.superRefine((graph, ctx) => {
   const bytes = utf8ByteLength(graph);
   if (bytes > GRAPH_MAX_BYTES) {
@@ -121,6 +176,54 @@ export const GraphInput = Graph.superRefine((graph, ctx) => {
       params: GRAPH_INVALID_ERROR,
     });
   }
+
+  const nodeIds = new Set<string>();
+  graph.nodes.forEach((node, index) => {
+    if (nodeIds.has(node.id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["nodes", index, "id"],
+        message: `节点 id 重复：${node.id}`,
+      });
+    }
+    nodeIds.add(node.id);
+  });
+
+  const edgeIds = new Set<string>();
+  graph.edges.forEach((edge, index) => {
+    if (edgeIds.has(edge.id)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["edges", index, "id"],
+        message: `边 id 重复：${edge.id}`,
+      });
+    }
+    edgeIds.add(edge.id);
+
+    if (edge.source === edge.target) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["edges", index],
+        message: `边不能指向自身：${edge.id}`,
+      });
+    }
+
+    if (!nodeIds.has(edge.source)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["edges", index, "source"],
+        message: `边的起点节点不存在：${edge.source}`,
+      });
+    }
+
+    if (!nodeIds.has(edge.target)) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["edges", index, "target"],
+        message: `边的终点节点不存在：${edge.target}`,
+      });
+    }
+  });
 });
 export type GraphInput = z.infer<typeof GraphInput>;
 

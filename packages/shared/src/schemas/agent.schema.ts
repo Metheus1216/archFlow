@@ -22,6 +22,25 @@ export const Run = z.object({
 });
 export type Run = z.infer<typeof Run>;
 
+/* ───────────────────────── HITL 中断（§5.1） ───────────────────────── */
+
+/** 中断类型：澄清、副作用审批、结果复核。 */
+export const InterruptKind = z.enum(["clarification", "approval", "review"]);
+export type InterruptKind = z.infer<typeof InterruptKind>;
+
+/**
+ * HITL 中断：落 `runs.metadata.interrupt`，重连时从库里重放。
+ * `payload` 的具体字段由对应节点在 P0-07 定义，这里先约束为 JSON 对象。
+ */
+export const Interrupt = z.object({
+  interruptId: Id,
+  kind: InterruptKind,
+  node: z.string().min(1).max(50),
+  payload: z.record(z.string(), z.unknown()),
+  expiresAt: ISODateTime,
+});
+export type Interrupt = z.infer<typeof Interrupt>;
+
 /* ───────────────────────── 运行阶段与受理响应（§5.1 / §5.2） ───────────────────────── */
 
 /** 生成阶段（§5.2 的 status 帧）。 */

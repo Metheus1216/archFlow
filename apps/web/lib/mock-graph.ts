@@ -1,14 +1,13 @@
 import type {
-  Graph,
+  LooseGraph,
   MockGraph,
   MockGraphEdge,
   MockGraphNode,
 } from "@arch-flow/shared";
 
 /**
- * 真实契约里的 Graph 内部结构仍是 TBD（服务端视为不透明 JSON）。
- * mock 阶段用这里的结构守卫代替 Zod 校验，避免把 zod 打进客户端首屏；
- * 服务端返回前已经按 MockGraph schema 校验过，这里只防止脏数据把渲染打崩。
+ * 真实图契约 P0-13 已定稿；P0-16 切换画布前，mock 会话仍存带坐标的 MockGraph，
+ * 这里用结构守卫代替 Zod 校验，避免把 zod 打进客户端首屏。
  */
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -31,7 +30,7 @@ const isMockGraphEdge = (value: unknown): value is MockGraphEdge =>
 /**
  * 解析失败按“没有画布”处理；未知 kind 的兜底在渲染层完成。
  */
-export const parseMockGraph = (graph: Graph | null): MockGraph | null => {
+export const parseMockGraph = (graph: LooseGraph | null): MockGraph | null => {
   if (
     !graph ||
     !Array.isArray(graph.nodes) ||
