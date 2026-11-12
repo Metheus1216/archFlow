@@ -58,7 +58,7 @@
 - 仅启动前端：`pnpm dev:web`
 - 仅启动后端（连带 agent/db/shared 的 watch）：`pnpm dev:api`
 - 仅启动 agent 包：`pnpm dev:agent`
-- 测试：Vitest（前后端统一）+ Supertest（后端接口）；尚未接入脚本，接入后提供 `pnpm test`
+- 测试：Vitest（前后端统一）+ Supertest（后端接口）；`pnpm test` 已接入，接口测试随 P0-11 补
 
 ---
 *如果对某个具体业务流有疑问，请优先阅读 `specs/数据流.md`、`specs/API文档/`（接口契约）、`specs/架构规划.md`（架构边界）和 `specs/待做清单.md`（执行优先级）；工程问题排查见 `specs/DECISIONS.md`，不要自己瞎猜。*

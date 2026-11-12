@@ -161,7 +161,7 @@ pnpm install
 4. 配置环境变量
 分别在各应用目录下创建 .env 文件：
 
-apps/api/.env (DB URL、JWT_SECRET、Redis 配置、LLM_API_KEY)
+apps/api/.env (DB URL、JWT_SECRET、Redis 配置、OPENAI_API_KEY)
 
 apps/web/.env (后端 API 地址)
 
