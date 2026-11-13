@@ -3,10 +3,10 @@ import {
   CardKind,
   CardStatus,
   Count,
-  Graph,
   GraphInput,
   Id,
   ISODateTime,
+  LooseGraph,
   MessageRole,
   PaginationQuery,
 } from "./common.schema.js";
@@ -30,7 +30,7 @@ export const LastMessage = z.object({
 export type LastMessage = z.infer<typeof LastMessage>;
 
 export const Conversation = ConversationMeta.extend({
-  draftGraph: Graph.nullable(),
+  draftGraph: LooseGraph.nullable(),
   draftVersion: z.number().int().nonnegative(),
   messageCount: z.number().int().nonnegative(),
   lastMessage: LastMessage.nullable(),
@@ -95,7 +95,7 @@ export const Message = z.object({
   id: Id,
   role: MessageRole,
   content: z.string(),
-  graphSnapshot: Graph.nullable(),
+  graphSnapshot: LooseGraph.nullable(),
   metadata: MessageMetadata.nullable(),
   createdAt: ISODateTime,
 });

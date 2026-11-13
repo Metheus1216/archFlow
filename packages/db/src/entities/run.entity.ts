@@ -21,6 +21,10 @@ export class RunEntity extends UuidEntity {
   @Column({ type: "jsonb", nullable: true })
   usage!: Record<string, unknown> | null;
 
+  /** HITL 当前 interrupt、工具调用摘要等；不存权威业务数据。 */
+  @Column({ type: "jsonb", nullable: true })
+  metadata!: Record<string, unknown> | null;
+
   @Column({ name: "error_code", type: "varchar", length: 64, nullable: true })
   errorCode!: string | null;
 

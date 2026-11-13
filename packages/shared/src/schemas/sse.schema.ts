@@ -7,7 +7,7 @@ import {
   Id,
   TraceId,
 } from "./common.schema.js";
-import { RunStage } from "./agent.schema.js";
+import { Interrupt, RunStage } from "./agent.schema.js";
 import {
   CardAnswer,
   Citation,
@@ -23,6 +23,8 @@ export const SseFrame = z.discriminatedUnion("type", [
     userMessageId: Id,
     assistantMessageId: Id,
     traceId: TraceId,
+    /** HITL 恢复时重新建立流；前端保留已有气泡，不清空本地文本。 */
+    resume: z.boolean().optional(),
   }),
   z.object({ type: z.literal("status"), stage: RunStage }),
   z.object({
@@ -38,6 +40,7 @@ export const SseFrame = z.discriminatedUnion("type", [
     messageId: Id,
     card: ConstraintCard,
   }),
+  Interrupt.extend({ type: z.literal("interrupt") }),
   z.object({
     type: z.literal("card-updated"),
     cardId: Id,

@@ -17,6 +17,10 @@ export class AgentStateEntity {
   @Column({ name: "current_step", type: "varchar", length: 50 })
   currentStep!: string;
 
+  /** 乐观锁版本号：每次状态更新 +1，防止并发 run 互相覆盖。 */
+  @Column({ type: "int", default: 0 })
+  version!: number;
+
   @Column({ name: "constraints_data", type: "jsonb", nullable: true })
   constraintsData!: Record<string, unknown> | null;
 
