@@ -13,6 +13,12 @@ const BooleanString = z
   .default("false")
   .transform((value) => value === "true");
 
+const OptionalString = z
+  .string()
+  .trim()
+  .optional()
+  .transform((value) => value || undefined);
+
 const EnvSchema = z.object({
   NODE_ENV: z
     .enum(["development", "test", "production"])
@@ -32,6 +38,13 @@ const EnvSchema = z.object({
   MINIO_ACCESS_KEY: z.string().min(1).default("minioadmin"),
   MINIO_SECRET_KEY: z.string().min(1).default("minioadmin"),
   MINIO_BUCKET: z.string().min(1).default("archflow"),
+
+  OPENAI_API_KEY: OptionalString,
+  OPENAI_BASE_URL: OptionalString,
+  OPENAI_MODEL: OptionalString,
+  OPENAI_EMBEDDING_API_KEY: OptionalString,
+  OPENAI_EMBEDDING_BASE_URL: OptionalString,
+  OPENAI_EMBEDDING_MODEL: OptionalString,
 });
 
 export type Env = z.infer<typeof EnvSchema>;
