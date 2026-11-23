@@ -1,9 +1,16 @@
-/**
- * @arch-flow/agent
- *
- * Agent 核心引擎出口。骨架阶段只导出包标识。
- *
- * 约束：手写 while 循环 / 状态机 + 原生 OpenAI SDK，
- * 禁止引入 LangChain / LangGraph / Vercel AI SDK。
- */
+export { createAgentEngine } from "./engine.js";
+export {
+  GRAPH_REFERENCE_QUESTION,
+  GRAPH_REFERENCE_READ_ONLY_MESSAGE,
+  isCurrentGraphRequest,
+  isHistoricalGraphRequest,
+} from "./graph-reference.js";
+export { createOpenAIAdapter } from "./llm/openai.js";
+export { AgentExecutionError } from "./ports.js";
+export type {
+  AgentEmbedding,
+  AgentModel,
+  CreateAgentEngineOptions,
+  AgentExecutionOptions,
+} from "./ports.js";
 export const AGENT_PACKAGE_NAME = "@arch-flow/agent" as const;
