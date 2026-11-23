@@ -1,9 +1,9 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
+  MockAccountId,
   MockDatabase,
   type AssetBrief,
   type Conversation,
@@ -22,23 +22,28 @@ import {
   type ProjectNode,
   type SendMessageInput,
 } from "@arch-flow/shared";
+import { getMockDir, readMockJson, withMockFileWrite, writeMockJson } from "./mock-files";
 
-/**
- * 开发期 mock 数据源。
- *
- * Next 的 Route Handler 与 Server Component 可能落在不同的模块图里，
- * 因此不用进程内对象，而是落盘到 apps/web/.mock/db.json（已 gitignore）。
- */
+const PROJECT_CREATE_KEY_MS = 24 * 60 * 60 * 1000;
+const getUserMockPath = (userId: string) =>
+  path.join(getMockDir(), "users", `${MockAccountId.parse(userId)}.json`);
+const emptyDatabase = () => MockDatabase.parse({ projects: [], conversations: [] });
 
-const MOCK_DIR = path.join(process.cwd(), ".mock");
-const MOCK_DB_PATH = path.join(MOCK_DIR, "db.json");
+export const readMockDatabase = (userId: string): Promise<MockDatabase> =>
+  readMockJson(getUserMockPath(userId), MockDatabase, emptyDatabase);
 
-const emptyDatabase = (): MockDatabase => ({
-  projects: [],
-  files: [],
-  assets: [],
-  conversations: [],
-});
+export const updateMockDatabase = async <T>(
+  userId: string,
+  mutate: (database: MockDatabase) => T,
+): Promise<T> => {
+  const filePath = getUserMockPath(userId);
+  return withMockFileWrite(filePath, async () => {
+    const database = await readMockJson(filePath, MockDatabase, emptyDatabase);
+    const result = mutate(database);
+    await writeMockJson(filePath, MockDatabase, database);
+    return result;
+  });
+};
 
 /** 新建项目时种入的示例资产画布，用于验证“从资产开新会话”。 */
 const DEFAULT_ASSET_GRAPH: MockGraph = {
@@ -97,23 +102,6 @@ const DEFAULT_ASSET_GRAPH: MockGraph = {
   ],
 };
 
-const readDatabase = async (): Promise<MockDatabase> => {
-  try {
-    const raw = await readFile(MOCK_DB_PATH, "utf8");
-    return MockDatabase.parse(JSON.parse(raw) as unknown);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return emptyDatabase();
-    }
-    throw error;
-  }
-};
-
-const writeDatabase = async (database: MockDatabase): Promise<void> => {
-  await mkdir(MOCK_DIR, { recursive: true });
-  await writeFile(MOCK_DB_PATH, JSON.stringify(database, null, 2), "utf8");
-};
-
 const toConversationBrief = (
   conversation: MockConversationRecord,
 ): ConversationBrief => ({
@@ -122,7 +110,7 @@ const toConversationBrief = (
   updatedAt: conversation.updatedAt,
 });
 
-const toConversation = (
+export const toMockConversation = (
   conversation: MockConversationRecord,
 ): Conversation => ({
   id: conversation.id,
@@ -157,8 +145,7 @@ const sortByUpdatedAtDesc = (
 
 const sortByCreatedAtDesc = <T extends { createdAt: string }>(
   records: T[],
-): T[] =>
-  [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+): T[] => [...records].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
 const toProjectNode = (
   project: Project,
@@ -177,8 +164,8 @@ const toProjectNode = (
   };
 };
 
-export const listProjectNodes = async (): Promise<ProjectNode[]> => {
-  const database = await readDatabase();
+export const listProjectNodes = async (userId: string): Promise<ProjectNode[]> => {
+  const database = await readMockDatabase(userId);
 
   return database.projects.map((project) =>
     toProjectNode(
@@ -192,74 +179,81 @@ export const listProjectNodes = async (): Promise<ProjectNode[]> => {
   );
 };
 
-/** 登录后 / 首屏判断：有会话就直接进 workspace。 */
-export const findFirstConversationId = async (): Promise<string | null> => {
-  const database = await readDatabase();
-  const [first] = sortByUpdatedAtDesc(database.conversations);
-
-  return first?.id ?? null;
-};
-
 export const createProject = async (
+  userId: string,
   input: CreateProjectInput,
-): Promise<ProjectNode> => {
-  const database = await readDatabase();
-  const timestamp = new Date().toISOString();
-  const projectId = randomUUID();
-  const conversationId = randomUUID();
-  const fileId = randomUUID();
-  const assetId = randomUUID();
+  idempotencyKey: string,
+): Promise<ProjectNode | null> =>
+  updateMockDatabase(userId, (database) => {
+    const now = Date.now();
+    database.projectCreations = database.projectCreations.filter((entry) => entry.expiresAt > now);
+    const replay = database.projectCreations.find((entry) => entry.key === idempotencyKey);
+    if (replay) {
+      return replay.input.name === input.name && replay.input.description === input.description
+        ? replay.project
+        : null;
+    }
 
-  const project: Project = {
-    id: projectId,
-    name: input.name,
-    description: input.description ?? null,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  };
+    const timestamp = new Date(now).toISOString();
+    const projectId = randomUUID();
+    const conversationId = randomUUID();
+    const fileId = randomUUID();
+    const assetId = randomUUID();
 
-  /** 知识库骨架：挂一个可点击的示例文件，便于验证文件操作菜单。 */
-  const file: MockFileRecord = {
-    id: fileId,
-    projectId,
-    fileName: "需求说明.md",
-    fileType: "text",
-    status: "ready",
-    createdAt: timestamp,
-  };
+    const project: Project = {
+      id: projectId,
+      name: input.name,
+      description: input.description ?? null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
 
-  /** 资产库骨架：挂一个示例资产，便于验证资产操作菜单。 */
-  const asset: MockAssetRecord = {
-    id: assetId,
-    projectId,
-    name: "初始架构",
-    createdAt: timestamp,
-    graphData: DEFAULT_ASSET_GRAPH,
-  };
+    /** 知识库骨架：挂一个可点击的示例文件，便于验证文件操作菜单。 */
+    const file: MockFileRecord = {
+      id: fileId,
+      projectId,
+      fileName: "需求说明.md",
+      fileType: "text",
+      status: "ready",
+      createdAt: timestamp,
+    };
 
-  /** 历史会话骨架：新项目下创建一条新会话。 */
-  const conversation: MockConversationRecord = {
-    id: conversationId,
-    projectId,
-    title: "新会话",
-    draftGraph: null,
-    draftVersion: 0,
-    messageCount: 0,
-    lastMessage: null,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    messages: [],
-  };
+    /** 资产库骨架：挂一个示例资产，便于验证资产操作菜单。 */
+    const asset: MockAssetRecord = {
+      id: assetId,
+      projectId,
+      name: "初始架构",
+      createdAt: timestamp,
+      graphData: DEFAULT_ASSET_GRAPH,
+    };
 
-  await writeDatabase({
-    projects: [...database.projects, project],
-    files: [...database.files, file],
-    assets: [...database.assets, asset],
-    conversations: [...database.conversations, conversation],
+    /** 历史会话骨架：新项目下创建一条新会话。 */
+    const conversation: MockConversationRecord = {
+      id: conversationId,
+      projectId,
+      title: "新会话",
+      draftGraph: null,
+      draftVersion: 0,
+      messageCount: 0,
+      lastMessage: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      messages: [],
+    };
+
+    database.projects.push(project);
+    database.files.push(file);
+    database.assets.push(asset);
+    database.conversations.push(conversation);
+    const result = toProjectNode(project, [conversation], [file], [asset]);
+    database.projectCreations.push({
+      key: idempotencyKey,
+      input,
+      project: result,
+      expiresAt: now + PROJECT_CREATE_KEY_MS,
+    });
+    return result;
   });
-
-  return toProjectNode(project, [conversation], [file], [asset]);
-};
 
 export type CreateConversationResult =
   | { status: "created"; conversation: Conversation }
@@ -268,224 +262,229 @@ export type CreateConversationResult =
 
 /** 在项目下新建空会话（画布初始为空）。 */
 export const createConversation = async (
+  userId: string,
   projectId: string,
   input: CreateConversationInput,
-): Promise<CreateConversationResult> => {
-  const database = await readDatabase();
-  const projectExists = database.projects.some(
-    (project) => project.id === projectId,
-  );
+): Promise<CreateConversationResult> =>
+  updateMockDatabase(userId, (database) => {
+    const projectExists = database.projects.some(
+      (project) => project.id === projectId,
+    );
 
-  if (!projectExists) {
-    return { status: "project_not_found" };
-  }
+    if (!projectExists) {
+      return { status: "project_not_found" };
+    }
 
-  /** §4.1：initialAssetId 必须属于当前项目，并用资产图初始化草稿。 */
-  const initialAsset = input.initialAssetId
-    ? database.assets.find(
-        (asset) =>
-          asset.id === input.initialAssetId && asset.projectId === projectId,
-      )
-    : undefined;
+    /** §4.1：initialAssetId 必须属于当前项目，并用资产图初始化草稿。 */
+    const initialAsset = input.initialAssetId
+      ? database.assets.find(
+          (asset) =>
+            asset.id === input.initialAssetId && asset.projectId === projectId,
+        )
+      : undefined;
 
-  if (input.initialAssetId && !initialAsset) {
-    return { status: "asset_not_found" };
-  }
+    if (input.initialAssetId && !initialAsset) {
+      return { status: "asset_not_found" };
+    }
 
-  const timestamp = new Date().toISOString();
-  const conversation: MockConversationRecord = {
-    id: randomUUID(),
-    projectId,
-    title: input.title ?? "新会话",
-    draftGraph: initialAsset?.graphData ?? null,
-    draftVersion: 0,
-    messageCount: 0,
-    lastMessage: null,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-    messages: [],
-  };
+    const timestamp = new Date().toISOString();
+    const conversation: MockConversationRecord = {
+      id: randomUUID(),
+      projectId,
+      title: input.title ?? "新会话",
+      draftGraph: initialAsset?.graphData ?? null,
+      draftVersion: 0,
+      messageCount: 0,
+      lastMessage: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      messages: [],
+    };
 
-  await writeDatabase({
-    ...database,
-    conversations: [...database.conversations, conversation],
+    database.conversations.push(conversation);
+
+    return {
+      status: "created",
+      conversation: toMockConversation(conversation),
+    };
   });
-
-  return { status: "created", conversation: toConversation(conversation) };
-};
 
 /** 删除项目：级联删除其知识库文件、资产与会话。 */
-export const deleteProject = async (projectId: string): Promise<boolean> => {
-  const database = await readDatabase();
-  const exists = database.projects.some((project) => project.id === projectId);
+export const deleteProject = async (userId: string, projectId: string): Promise<boolean> =>
+  updateMockDatabase(userId, (database) => {
+    const exists = database.projects.some(
+      (project) => project.id === projectId,
+    );
 
-  if (!exists) {
-    return false;
-  }
+    if (!exists) {
+      return false;
+    }
 
-  await writeDatabase({
-    projects: database.projects.filter((project) => project.id !== projectId),
-    files: database.files.filter((file) => file.projectId !== projectId),
-    assets: database.assets.filter((asset) => asset.projectId !== projectId),
-    conversations: database.conversations.filter(
+    database.projects = database.projects.filter((project) => project.id !== projectId);
+    database.files = database.files.filter((file) => file.projectId !== projectId);
+    database.assets = database.assets.filter((asset) => asset.projectId !== projectId);
+    database.conversations = database.conversations.filter(
       (conversation) => conversation.projectId !== projectId,
-    ),
-  });
+    );
 
-  return true;
-};
+    return true;
+  });
 
 export const deleteFile = async (
+  userId: string,
   projectId: string,
   fileId: string,
-): Promise<boolean> => {
-  const database = await readDatabase();
-  const exists = database.files.some(
-    (file) => file.id === fileId && file.projectId === projectId,
-  );
+): Promise<boolean> =>
+  updateMockDatabase(userId, (database) => {
+    const exists = database.files.some(
+      (file) => file.id === fileId && file.projectId === projectId,
+    );
 
-  if (!exists) {
-    return false;
-  }
+    if (!exists) {
+      return false;
+    }
 
-  await writeDatabase({
-    ...database,
-    files: database.files.filter(
+    database.files = database.files.filter(
       (file) => !(file.id === fileId && file.projectId === projectId),
-    ),
-  });
+    );
 
-  return true;
-};
+    return true;
+  });
 
 export const deleteAsset = async (
+  userId: string,
   projectId: string,
   assetId: string,
-): Promise<boolean> => {
-  const database = await readDatabase();
-  const exists = database.assets.some(
-    (asset) => asset.id === assetId && asset.projectId === projectId,
-  );
+): Promise<boolean> =>
+  updateMockDatabase(userId, (database) => {
+    const exists = database.assets.some(
+      (asset) => asset.id === assetId && asset.projectId === projectId,
+    );
 
-  if (!exists) {
-    return false;
-  }
+    if (!exists) {
+      return false;
+    }
 
-  await writeDatabase({
-    ...database,
-    assets: database.assets.filter(
+    database.assets = database.assets.filter(
       (asset) => !(asset.id === assetId && asset.projectId === projectId),
-    ),
-  });
+    );
 
-  return true;
-};
+    return true;
+  });
 
 export const deleteConversation = async (
+  userId: string,
   conversationId: string,
-): Promise<boolean> => {
-  const database = await readDatabase();
-  const exists = database.conversations.some(
-    (conversation) => conversation.id === conversationId,
-  );
+): Promise<boolean> =>
+  updateMockDatabase(userId, (database) => {
+    const exists = database.conversations.some(
+      (conversation) => conversation.id === conversationId,
+    );
 
-  if (!exists) {
-    return false;
-  }
+    if (!exists) {
+      return false;
+    }
 
-  await writeDatabase({
-    ...database,
-    conversations: database.conversations.filter(
+    database.conversations = database.conversations.filter(
       (conversation) => conversation.id !== conversationId,
-    ),
-  });
+    );
 
-  return true;
-};
+    return true;
+  });
 
 /** 重命名会话；不改变 updatedAt，避免侧边栏排序因改名而跳动。 */
 export const renameConversation = async (
+  userId: string,
   conversationId: string,
   title: string,
-): Promise<Conversation | null> => {
-  const database = await readDatabase();
-  const conversation = database.conversations.find(
-    (item) => item.id === conversationId,
-  );
+): Promise<Conversation | null> =>
+  updateMockDatabase(userId, (database) => {
+    const conversation = database.conversations.find(
+      (item) => item.id === conversationId,
+    );
 
-  if (!conversation) {
-    return null;
-  }
+    if (!conversation) {
+      return null;
+    }
 
-  const updated: MockConversationRecord = { ...conversation, title };
-
-  await writeDatabase({
-    ...database,
-    conversations: database.conversations.map((item) =>
-      item.id === conversationId ? updated : item,
-    ),
+    conversation.title = title;
+    conversation.titleManuallySet = true;
+    return toMockConversation(conversation);
   });
-
-  return toConversation(updated);
-};
 
 /** 追加一条用户消息，并同步会话的计数、摘要与更新时间。 */
 export const appendMessage = async (
+  userId: string,
   conversationId: string,
   input: SendMessageInput,
-): Promise<Message | null> => {
-  const database = await readDatabase();
-  const conversation = database.conversations.find(
-    (item) => item.id === conversationId,
-  );
+): Promise<Message | null> =>
+  updateMockDatabase(userId, (database) => {
+    const conversation = database.conversations.find(
+      (item) => item.id === conversationId,
+    );
 
-  if (!conversation) {
-    return null;
-  }
+    if (!conversation) {
+      return null;
+    }
 
-  const timestamp = new Date().toISOString();
-  const message: Message = {
-    id: randomUUID(),
-    role: "user",
-    content: input.content,
-    graphSnapshot: null,
-    metadata: null,
-    createdAt: timestamp,
-  };
+    const timestamp = new Date().toISOString();
+    const message: Message = {
+      id: randomUUID(),
+      role: "user",
+      content: input.content,
+      graphSnapshot: null,
+      metadata: null,
+      createdAt: timestamp,
+    };
 
-  await writeDatabase({
-    ...database,
-    conversations: database.conversations.map((item) =>
-      item.id === conversationId
-        ? {
-            ...item,
-            messages: [...item.messages, message],
-            messageCount: item.messageCount + 1,
-            lastMessage: {
-              id: message.id,
-              role: message.role,
-              contentPreview: input.content.slice(0, 80),
-              createdAt: timestamp,
-            },
-            updatedAt: timestamp,
-          }
-        : item,
-    ),
+    conversation.messages.push(message);
+    conversation.messageCount += 1;
+    conversation.lastMessage = {
+      id: message.id,
+      role: message.role,
+      contentPreview: input.content.slice(0, 80),
+      createdAt: timestamp,
+    };
+    conversation.updatedAt = timestamp;
+
+    return message;
   });
 
-  return message;
+export const getMockConversationRecord = async (
+  userId: string,
+  conversationId: string,
+): Promise<MockConversationRecord | null> => {
+  const database = await readMockDatabase(userId);
+  return (
+    database.conversations.find(
+      (conversation) => conversation.id === conversationId,
+    ) ?? null
+  );
 };
+
+export const updateMockConversationRecord = async (
+  userId: string,
+  conversationId: string,
+  update: (record: MockConversationRecord) => MockConversationRecord | null,
+): Promise<MockConversationRecord | null> =>
+  updateMockDatabase(userId, (database) => {
+    const index = database.conversations.findIndex(
+      (conversation) => conversation.id === conversationId,
+    );
+    const updated = index !== -1 && update(database.conversations[index]);
+    if (!updated) return null;
+
+    database.conversations[index] = updated;
+    return updated;
+  });
 
 /** §4.2：只返回会话元信息 + 草稿图，不含消息。 */
 export const getConversation = async (
+  userId: string,
   conversationId: string,
 ): Promise<Conversation | null> => {
-  const database = await readDatabase();
-  const record = database.conversations.find(
-    (conversation) => conversation.id === conversationId,
-  );
-
-  return record ? toConversation(record) : null;
+  const record = await getMockConversationRecord(userId, conversationId);
+  return record ? toMockConversation(record) : null;
 };
 
 /**
@@ -494,10 +493,11 @@ export const getConversation = async (
  * 返回的 items 始终按时间正序排列，便于直接渲染。
  */
 export const listMessages = async (
+  userId: string,
   conversationId: string,
   query: MessageListQuery,
 ): Promise<Page<Message> | null> => {
-  const database = await readDatabase();
+  const database = await readMockDatabase(userId);
   const record = database.conversations.find(
     (conversation) => conversation.id === conversationId,
   );
@@ -536,8 +536,7 @@ export const listMessages = async (
 
   return {
     items,
-    nextCursor:
-      hasMore && items.length > 0 ? items[items.length - 1].id : null,
+    nextCursor: hasMore && items.length > 0 ? items[items.length - 1].id : null,
     hasMore,
   };
 };

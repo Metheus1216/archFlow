@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -12,45 +12,61 @@ import {
   Lock,
   Mail,
   User,
-  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { setSessionHint } from "@/lib/session";
+import { useAuth } from "@/hooks/use-auth";
+import { ApiError, signIn, signUp } from "@/lib/api-client";
 
 type FormMode = "login" | "register";
 
 export const LoginForm = () => {
   const router = useRouter();
+  const auth = useAuth();
   const [mode, setMode] = useState<FormMode>("login");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [failure, setFailure] = useState("");
+  const registrationKey = useRef<string | null>(null);
   const isRegister = mode === "register";
-  const isDev = process.env.NODE_ENV !== "production";
 
-  const enterApp = () => {
-    setSessionHint();
-    router.replace("/workspace");
-  };
+  useEffect(() => {
+    if (auth.status === "authenticated") router.replace("/");
+  }, [auth.status, router]);
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (pending || auth.status === "authenticated") return;
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") ?? "");
+    const password = String(form.get("password") ?? "");
+    const username = String(form.get("username") ?? "");
 
-    if (!isDev) {
-      // TODO: 接入 POST /api/v1/auth/login，成功后再写会话提示并跳转。
+    if (isRegister && password !== form.get("confirmPassword")) {
+      setFailure("两次输入的密码不一致");
       return;
     }
 
-    enterApp();
-  };
-
-  const handleGithubLogin = () => {
-    if (isDev) {
-      enterApp();
+    setPending(true);
+    setFailure("");
+    try {
+      if (isRegister) {
+        registrationKey.current ??= crypto.randomUUID();
+        await signUp({ username, email, password }, registrationKey.current);
+      } else {
+        await signIn({ email, password });
+      }
+    } catch (error) {
+      setFailure(error instanceof ApiError ? error.errors?.[0]?.message ?? error.message : "请求失败，请稍后重试");
+    } finally {
+      setPending(false);
     }
   };
 
   const toggleMode = () => {
+    setFailure("");
+    registrationKey.current = null;
     setMode((current) => (current === "login" ? "register" : "login"));
   };
 
@@ -68,7 +84,7 @@ export const LoginForm = () => {
           </p>
         </div>
 
-        <form onSubmit={handleSubmit} className="mt-7 space-y-4">
+        <form onSubmit={handleSubmit} onChange={() => { registrationKey.current = null; }} className="mt-7 space-y-4">
           {isRegister && (
             <div className="space-y-2">
               <label htmlFor="username" className="text-xs font-medium">
@@ -191,8 +207,9 @@ export const LoginForm = () => {
             </div>
           )}
 
-          <Button type="submit" size="lg" className="mt-1 w-full">
-            {isRegister ? "创建账号" : "登录"}
+          {failure && <p className="text-xs text-destructive" role="alert">{failure}</p>}
+          <Button type="submit" size="lg" className="mt-1 w-full" disabled={pending || auth.status === "authenticated"}>
+            {pending ? "正在提交…" : isRegister ? "创建账号" : "登录"}
             <ArrowRight className="size-4" strokeWidth={1.75} />
           </Button>
         </form>
@@ -212,37 +229,18 @@ export const LoginForm = () => {
           variant="outline"
           size="lg"
           className="w-full"
-          onClick={handleGithubLogin}
+          disabled
         >
           <Github className="size-4" strokeWidth={1.75} />
           使用 GitHub {isRegister ? "注册" : "登录"}
         </Button>
-
-        {isDev && (
-          <div className="mt-4 flex items-center justify-between gap-3 rounded-md border border-dashed border-border px-3 py-2.5">
-            <div className="min-w-0">
-              <p className="text-[11px] font-medium">开发环境</p>
-              <p className="mt-0.5 text-[10px] leading-4 text-muted-foreground">
-                跳过真实认证，直接进入应用
-              </p>
-            </div>
-            <Button
-              variant="secondary"
-              size="sm"
-              className="shrink-0"
-              onClick={enterApp}
-            >
-              <Zap className="size-3" strokeWidth={1.75} />
-              一键登录
-            </Button>
-          </div>
-        )}
 
         <p className="mt-6 text-center text-xs text-muted-foreground">
           {isRegister ? "已有账号？" : "还没有账号？"}{" "}
           <button
             type="button"
             onClick={toggleMode}
+            disabled={pending}
             className="font-medium text-foreground underline-offset-4 hover:underline"
           >
             {isRegister ? "登录" : "注册"}

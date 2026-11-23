@@ -4,10 +4,9 @@ import {
   CreateConversationInput,
   ERROR_CODES,
 } from "@arch-flow/shared";
+import { requireMockUser } from "@/lib/mock-auth";
 import { createConversation } from "@/lib/mock-db";
 import {
-  MOCK_ENABLED,
-  mockDisabled,
   mockError,
   mockOk,
   toFieldErrors,
@@ -20,15 +19,14 @@ type RouteContext = {
 };
 
 export const POST = async (request: Request, context: RouteContext) => {
-  if (!MOCK_ENABLED) {
-    return mockDisabled();
-  }
+  const user = await requireMockUser(request);
+  if (user instanceof Response) return user;
 
   try {
     const { projectId } = await context.params;
-    const body: unknown = await request.json().catch(() => ({}));
+    const body: unknown = request.body === null ? {} : await request.json();
     const input = CreateConversationInput.parse(body);
-    const result = await createConversation(projectId, input);
+    const result = await createConversation(user.id, projectId, input);
 
     if (result.status === "project_not_found") {
       return mockError(404, ERROR_CODES.PROJECT_NOT_FOUND, "项目不存在");
@@ -42,12 +40,13 @@ export const POST = async (request: Request, context: RouteContext) => {
   } catch (error) {
     if (error instanceof z.ZodError) {
       return mockError(
-        400,
+        422,
         ERROR_CODES.VALIDATION_FAILED,
         "请求参数不合法",
         toFieldErrors(error),
       );
     }
+    if (error instanceof SyntaxError) return mockError(400, ERROR_CODES.BAD_REQUEST, "请求不是有效的 JSON");
 
     throw error;
   }

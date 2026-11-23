@@ -1,5 +1,7 @@
 "use client";
 
+import { useState } from "react";
+import dynamic from "next/dynamic";
 import {
   CircleHelp,
   LayoutGrid,
@@ -14,6 +16,11 @@ import { parseMockGraph } from "@/lib/mock-graph";
 import { useWorkspaceStore } from "@/store/workspace-store";
 import { ArchitectureCanvas } from "./architecture-canvas";
 import { ExportMenu } from "./export-menu";
+
+const GraphCanvas = dynamic(
+  async () => (await import("./graph-canvas")).GraphCanvas,
+  { ssr: false },
+);
 
 const CanvasStatus = ({
   conversationId,
@@ -59,13 +66,19 @@ const CanvasStatus = ({
   );
 };
 
-export const CanvasPanel = ({ conversationId }: { conversationId: string | null }) => {
+export const CanvasPanel = ({
+  conversationId,
+}: {
+  conversationId: string | null;
+}) => {
   const conversation = useConversation(conversationId);
   const zoom = useWorkspaceStore((state) => state.zoom);
   const increaseZoom = useWorkspaceStore((state) => state.increaseZoom);
   const decreaseZoom = useWorkspaceStore((state) => state.decreaseZoom);
-  const graph = parseMockGraph(conversation.data?.draftGraph ?? null);
-  const hasGraph = graph !== null && graph.nodes.length > 0;
+  const [layoutRevision, setLayoutRevision] = useState(0);
+  const draftGraph = conversation.data?.draftGraph ?? null;
+  const graph = parseMockGraph(draftGraph);
+  const hasGraph = Boolean(draftGraph?.nodes.length);
   const title = conversation.data?.title ?? "未命名画布";
 
   return (
@@ -77,7 +90,12 @@ export const CanvasPanel = ({ conversationId }: { conversationId: string | null 
             <span className="truncate font-medium">{title}</span>
           </div>
           <span className="hidden h-4 w-px bg-border md:block" />
-          <Button variant="outline" size="sm" disabled={!hasGraph}>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!hasGraph || Boolean(graph)}
+            onClick={() => setLayoutRevision((revision) => revision + 1)}
+          >
             <LayoutGrid className="size-3.5" strokeWidth={1.75} />
             自动布局
           </Button>
@@ -103,6 +121,13 @@ export const CanvasPanel = ({ conversationId }: { conversationId: string | null 
           </div>
         )}
 
+        {hasGraph && draftGraph && !graph && (
+          <GraphCanvas
+            key={`${conversationId}:${conversation.data?.draftVersion}:${layoutRevision}`}
+            graph={draftGraph}
+          />
+        )}
+
         {!hasGraph && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center px-8">
             <div className="max-w-[280px] text-center">
@@ -124,35 +149,37 @@ export const CanvasPanel = ({ conversationId }: { conversationId: string | null 
           </div>
         )}
 
-        <div className="absolute bottom-3 right-3 z-20 flex items-center overflow-hidden rounded-md border border-border bg-card">
-          <button
-            type="button"
-            aria-label="缩小画布"
-            onClick={decreaseZoom}
-            className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <Minus className="size-3.5" strokeWidth={1.75} />
-          </button>
-          <span className="w-12 text-center text-[11px] tabular-nums text-muted-foreground">
-            {zoom}%
-          </span>
-          <button
-            type="button"
-            aria-label="放大画布"
-            onClick={increaseZoom}
-            className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <Plus className="size-3.5" strokeWidth={1.75} />
-          </button>
-          <span className="h-4 w-px bg-border" />
-          <button
-            type="button"
-            aria-label="画布帮助"
-            className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-          >
-            <CircleHelp className="size-3.5" strokeWidth={1.75} />
-          </button>
-        </div>
+        {(!hasGraph || graph) && (
+          <div className="absolute bottom-3 right-3 z-20 flex items-center overflow-hidden rounded-md border border-border bg-card">
+            <button
+              type="button"
+              aria-label="缩小画布"
+              onClick={decreaseZoom}
+              className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Minus className="size-3.5" strokeWidth={1.75} />
+            </button>
+            <span className="w-12 text-center text-[11px] tabular-nums text-muted-foreground">
+              {zoom}%
+            </span>
+            <button
+              type="button"
+              aria-label="放大画布"
+              onClick={increaseZoom}
+              className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <Plus className="size-3.5" strokeWidth={1.75} />
+            </button>
+            <span className="h-4 w-px bg-border" />
+            <button
+              type="button"
+              aria-label="画布帮助"
+              className="flex size-8 items-center justify-center text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+            >
+              <CircleHelp className="size-3.5" strokeWidth={1.75} />
+            </button>
+          </div>
+        )}
       </div>
     </section>
   );

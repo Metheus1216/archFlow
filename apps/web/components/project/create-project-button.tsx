@@ -55,10 +55,6 @@ export const CreateProjectButton = ({
 
   const handleCreate = () => {
     createProject.mutate({ name: DEFAULT_PROJECT_NAME });
-
-    if (origin !== "/workspace") {
-      router.push("/workspace");
-    }
   };
 
   return (
@@ -67,6 +63,7 @@ export const CreateProjectButton = ({
       size={size}
       className={className}
       onClick={handleCreate}
+      disabled={createProject.isPending}
     >
       {showPendingState && createProject.isPending ? (
         <Loader2 className="size-4 animate-spin" strokeWidth={1.75} />

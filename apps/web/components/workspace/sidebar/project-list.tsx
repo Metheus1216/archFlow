@@ -1,16 +1,23 @@
 "use client";
 
-import type { ProjectNode } from "@arch-flow/shared";
 import { useProjects } from "@/hooks/use-projects";
+import { Button } from "@/components/ui/button";
 import { ProjectGroup } from "./project-group";
 
-type ProjectListProps = {
-  initialProjects: ProjectNode[];
-};
+export const ProjectList = () => {
+  const projects = useProjects();
+  const items = projects.data?.items ?? [];
 
-export const ProjectList = ({ initialProjects }: ProjectListProps) => {
-  const projects = useProjects(initialProjects);
-  const items = projects.data?.items ?? initialProjects;
+  if (projects.isPending) return <p className="px-3 text-xs text-muted-foreground" role="status">正在加载项目…</p>;
+
+  if (projects.isError) {
+    return (
+      <div className="flex items-center justify-between gap-2 px-3" role="alert">
+        <p className="text-xs text-muted-foreground">项目加载失败</p>
+        <Button variant="ghost" size="sm" onClick={() => void projects.refetch()}>重试</Button>
+      </div>
+    );
+  }
 
   if (items.length === 0) {
     return (

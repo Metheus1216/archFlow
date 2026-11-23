@@ -28,7 +28,7 @@ export const mockOk = <T>(
     traceId: crypto.randomUUID(),
   });
 
-  return NextResponse.json(envelope, { status });
+  return NextResponse.json(envelope, { status, headers: { "Cache-Control": "no-store" } });
 };
 
 export const mockError = (
@@ -45,7 +45,7 @@ export const mockError = (
       errors,
       traceId: crypto.randomUUID(),
     },
-    { status },
+    { status, headers: { "Cache-Control": "no-store" } },
   );
 
 export const mockDisabled = (): NextResponse =>
@@ -59,7 +59,7 @@ export const mockDisabled = (): NextResponse =>
 export const mockNoContent = (): NextResponse =>
   new NextResponse(null, {
     status: 204,
-    headers: { "X-Trace-Id": crypto.randomUUID() },
+    headers: { "X-Trace-Id": crypto.randomUUID(), "Cache-Control": "no-store" },
   });
 
 export const toFieldErrors = (error: z.ZodError): FieldError[] =>

@@ -1,94 +1,61 @@
-import { z } from "zod";
 import {
   ERROR_CODES,
+  Id,
+  IdempotencyKey,
   Message,
   MessageListQuery,
-  MockSendMessageResult,
+  MockRunAccepted,
+  MockSendMessageInput,
   PageSchema,
-  SendMessageInput,
 } from "@arch-flow/shared";
-import { appendMessage, listMessages } from "@/lib/mock-db";
-import {
-  MOCK_ENABLED,
-  mockDisabled,
-  mockError,
-  mockOk,
-  toFieldErrors,
-} from "@/lib/mock-response";
+import { listMessages } from "@/lib/mock-db";
+import { mockError, mockOk } from "@/lib/mock-response";
+import { handleMockRunRoute } from "@/lib/mock-run-route";
+import { getMockRunRuntime } from "@/lib/preview-agent";
 
 export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
 
-type RouteContext = {
-  params: Promise<{ conversationId: string }>;
-};
-
+type RouteContext = { params: Promise<{ conversationId: string }> };
 const messagePageSchema = PageSchema(Message);
 
-export const GET = async (request: Request, context: RouteContext) => {
-  if (!MOCK_ENABLED) {
-    return mockDisabled();
-  }
-
-  try {
-    const { conversationId } = await context.params;
+export const GET = async (request: Request, { params }: RouteContext) =>
+  handleMockRunRoute(request, async (userId) => {
+    const conversationId = Id.parse((await params).conversationId);
     const query = MessageListQuery.parse(
       Object.fromEntries(new URL(request.url).searchParams),
     );
-    const page = await listMessages(conversationId, query);
+    const page = await listMessages(userId, conversationId, query);
+    return page
+      ? mockOk(messagePageSchema, page)
+      : mockError(404, ERROR_CODES.CONVERSATION_NOT_FOUND, "会话不存在");
+  });
 
-    if (!page) {
+export const POST = async (request: Request, { params }: RouteContext) =>
+  handleMockRunRoute(request, async (userId) => {
+    const conversationId = Id.parse((await params).conversationId);
+    const key = IdempotencyKey.safeParse(
+      request.headers.get("Idempotency-Key"),
+    );
+    if (!key.success) {
       return mockError(
-        404,
-        ERROR_CODES.CONVERSATION_NOT_FOUND,
-        "会话不存在",
-      );
-    }
-
-    return mockOk(messagePageSchema, page);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return mockError(
-        400,
+        422,
         ERROR_CODES.VALIDATION_FAILED,
-        "请求参数不合法",
-        toFieldErrors(error),
+        "缺少有效的 Idempotency-Key",
       );
     }
-
-    throw error;
-  }
-};
-
-export const POST = async (request: Request, context: RouteContext) => {
-  if (!MOCK_ENABLED) {
-    return mockDisabled();
-  }
-
-  try {
-    const { conversationId } = await context.params;
-    const body: unknown = await request.json();
-    const input = SendMessageInput.parse(body);
-    const message = await appendMessage(conversationId, input);
-
-    if (!message) {
-      return mockError(
-        404,
-        ERROR_CODES.CONVERSATION_NOT_FOUND,
-        "会话不存在",
-      );
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return mockError(400, ERROR_CODES.BAD_REQUEST, "请求不是合法的 JSON");
     }
-
-    return mockOk(MockSendMessageResult, { message }, 201);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return mockError(
-        400,
-        ERROR_CODES.VALIDATION_FAILED,
-        "请求参数不合法",
-        toFieldErrors(error),
-      );
-    }
-
-    throw error;
-  }
-};
+    const input = MockSendMessageInput.parse(body);
+    const accepted = await getMockRunRuntime().accept(
+      userId,
+      conversationId,
+      input,
+      key.data,
+    );
+    return mockOk(MockRunAccepted, accepted, 202);
+  });

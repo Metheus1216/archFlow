@@ -2,111 +2,92 @@
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type {
-  Conversation,
-  Message,
-  MockSendMessageResult,
-  Page,
-  ProjectNode,
-  SendMessageInput,
+  MockActiveRun,
+  MockRunAccepted,
+  MockSendMessageInput,
 } from "@arch-flow/shared";
 import { requestApi } from "@/lib/api-client";
 import {
-  conversationQueryKey,
+  activeRunQueryKey,
   messagesQueryKey,
   projectQueryKey,
 } from "@/lib/query-keys";
 
-type SendMessageVariables = SendMessageInput & {
+type SendMessageVariables = MockSendMessageInput & {
   conversationId: string;
+  idempotencyKey: string;
 };
 
-/** 用服务端返回的消息同步会话摘要，避免再发一次 GET。 */
-const patchConversation = (
-  conversation: Conversation,
-  message: Message,
-): Conversation => ({
-  ...conversation,
-  messageCount: conversation.messageCount + 1,
-  lastMessage: {
-    id: message.id,
-    role: message.role,
-    contentPreview: message.content.slice(0, 80),
-    createdAt: message.createdAt,
-  },
-  updatedAt: message.createdAt,
-});
+export type ChatSubmission = Pick<
+  SendMessageVariables,
+  | "conversationId"
+  | "content"
+  | "interruptId"
+  | "graphReferenceMessageId"
+  | "idempotencyKey"
+>;
 
-/** 同步侧边栏里的会话摘要，并按更新时间把当前会话排到最前。 */
-const patchProject = (
-  project: ProjectNode,
-  conversationId: string,
-  message: Message,
-): ProjectNode => {
-  const exists = project.conversations.some(
-    (conversation) => conversation.id === conversationId,
-  );
-
-  if (!exists) {
-    return project;
-  }
-
-  const conversations = project.conversations
-    .map((conversation) =>
-      conversation.id === conversationId
-        ? { ...conversation, updatedAt: message.createdAt }
-        : conversation,
-    )
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+export const prepareChatSubmission = (
+  {
+    conversationId,
+    content,
+    interruptId,
+  }: Omit<ChatSubmission, "graphReferenceMessageId" | "idempotencyKey">,
+  previous: ChatSubmission | null,
+  reference?: { conversationId: string; messageId: string },
+): ChatSubmission => {
+  const graphReferenceMessageId =
+    reference?.conversationId === conversationId
+      ? reference.messageId
+      : undefined;
+  const isRetry =
+    previous?.conversationId === conversationId &&
+    previous.content === content &&
+    previous.interruptId === interruptId &&
+    previous.graphReferenceMessageId === graphReferenceMessageId;
 
   return {
-    ...project,
-    lastActiveConversationId: conversationId,
-    conversations,
+    conversationId,
+    content,
+    interruptId,
+    graphReferenceMessageId,
+    idempotencyKey: isRetry ? previous.idempotencyKey : crypto.randomUUID(),
   };
 };
 
-export const useSendMessage = () => {
+export const useSendMessage = (
+  onAccepted: (conversationId: string) => void,
+) => {
   const queryClient = useQueryClient();
 
-  return useMutation<MockSendMessageResult, Error, SendMessageVariables>({
-    mutationFn: async ({ conversationId, ...input }) =>
-      requestApi<MockSendMessageResult>(
+  return useMutation({
+    mutationFn: async ({
+      conversationId,
+      idempotencyKey,
+      ...input
+    }: SendMessageVariables) =>
+      requestApi<MockRunAccepted>(
         `/api/mock/conversations/${conversationId}/messages`,
         {
           method: "POST",
+          headers: { "Idempotency-Key": idempotencyKey },
           body: JSON.stringify(input),
         },
       ),
-    /**
-     * POST 已经返回了权威消息，三份缓存都在本地增量更新；
-     * 不再 invalidate，否则发一条消息会立刻多打 3 个 GET。
-     */
-    onSuccess: ({ message }, { conversationId }) => {
-      queryClient.setQueryData<Page<Message>>(
-        messagesQueryKey(conversationId),
-        (current) =>
-          current
-            ? { ...current, items: [...current.items, message] }
-            : current,
-      );
-
-      queryClient.setQueryData<Conversation>(
-        conversationQueryKey(conversationId),
-        (current) => (current ? patchConversation(current, message) : current),
-      );
-
-      queryClient.setQueryData<Page<ProjectNode>>(
-        projectQueryKey,
-        (current) =>
-          current
-            ? {
-                ...current,
-                items: current.items.map((project) =>
-                  patchProject(project, conversationId, message),
-                ),
-              }
-            : current,
-      );
+    onSuccess: async (run, { conversationId }) => {
+      const queryKey = activeRunQueryKey(conversationId);
+      await queryClient.cancelQueries({ queryKey });
+      queryClient.setQueryData<MockActiveRun>(queryKey, { run, latest: run });
+      onAccepted(conversationId);
+      void queryClient.invalidateQueries({
+        queryKey: messagesQueryKey(conversationId),
+      });
+      void queryClient.invalidateQueries({ queryKey: projectQueryKey });
+    },
+    onError: (_error, { conversationId }) => {
+      void queryClient.invalidateQueries({
+        queryKey: activeRunQueryKey(conversationId),
+      });
     },
   });
 };

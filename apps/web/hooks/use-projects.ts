@@ -11,60 +11,15 @@ import { projectQueryKey } from "@/lib/query-keys";
 
 export const DEFAULT_PROJECT_NAME = "新架构项目";
 
-type CreateProjectContext = {
-  previous: Page<ProjectNode> | undefined;
-  optimisticId: string;
-};
-
 type CreateProjectCallbacks = {
   onCreated?: (project: ProjectNode) => void;
   onFailed?: (error: Error) => void;
 };
 
-const buildOptimisticProject = (input: CreateProjectInput): ProjectNode => {
-  const now = new Date().toISOString();
-  const conversationId = crypto.randomUUID();
-
-  return {
-    id: crypto.randomUUID(),
-    name: input.name,
-    description: input.description ?? null,
-    createdAt: now,
-    updatedAt: now,
-    lastActiveConversationId: conversationId,
-    files: [
-      {
-        id: crypto.randomUUID(),
-        fileName: "需求说明.md",
-        fileType: "text",
-        status: "ready",
-        createdAt: now,
-      },
-    ],
-    assets: [
-      {
-        id: crypto.randomUUID(),
-        name: "初始架构",
-        createdAt: now,
-      },
-    ],
-    conversations: [
-      {
-        id: conversationId,
-        title: "新会话",
-        updatedAt: now,
-      },
-    ],
-  };
-};
-
-export const useProjects = (initialProjects?: ProjectNode[]) =>
+export const useProjects = () =>
   useQuery({
     queryKey: projectQueryKey,
-    queryFn: async () => requestApi<Page<ProjectNode>>("/api/mock/projects"),
-    initialData: initialProjects
-      ? { items: initialProjects, nextCursor: null, hasMore: false }
-      : undefined,
+    queryFn: async ({ signal }) => requestApi<Page<ProjectNode>>("/api/mock/projects", { signal }),
   });
 
 /**
@@ -74,48 +29,20 @@ export const useProjects = (initialProjects?: ProjectNode[]) =>
 export const useCreateProject = (callbacks: CreateProjectCallbacks = {}) => {
   const queryClient = useQueryClient();
 
-  return useMutation<ProjectNode, Error, CreateProjectInput, CreateProjectContext>({
+  return useMutation<ProjectNode, Error, CreateProjectInput>({
     mutationFn: async (input) =>
       requestApi<ProjectNode>("/api/mock/projects", {
         method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
         body: JSON.stringify(input),
       }),
-    onMutate: (input) => {
-      const previous =
-        queryClient.getQueryData<Page<ProjectNode>>(projectQueryKey);
-      const optimistic = buildOptimisticProject(input);
-
+    onError: (error) => callbacks.onFailed?.(error),
+    onSuccess: (project) => {
       queryClient.setQueryData<Page<ProjectNode>>(projectQueryKey, (current) => ({
-        items: [optimistic, ...(current?.items ?? [])],
+        items: [project, ...(current?.items.filter((item) => item.id !== project.id) ?? [])],
         nextCursor: current?.nextCursor ?? null,
         hasMore: current?.hasMore ?? false,
       }));
-
-      return { previous, optimisticId: optimistic.id };
-    },
-    onError: (error, _input, context) => {
-      if (context?.previous) {
-        queryClient.setQueryData(projectQueryKey, context.previous);
-      } else {
-        queryClient.removeQueries({ queryKey: projectQueryKey });
-      }
-
-      callbacks.onFailed?.(error);
-    },
-    onSuccess: (project, _input, context) => {
-      queryClient.setQueryData<Page<ProjectNode>>(projectQueryKey, (current) =>
-        current
-          ? {
-              ...current,
-              items: current.items.map((item) =>
-                item.id === context?.optimisticId ? project : item,
-              ),
-            }
-          : current,
-      );
-
-      // 服务端返回的 project 已包含完整嵌套数据，直接替换乐观项即可；
-      // 这里不再 invalidate，避免创建项目后立刻多打一次 GET。
       callbacks.onCreated?.(project);
     },
   });

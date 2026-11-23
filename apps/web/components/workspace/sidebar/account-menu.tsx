@@ -1,26 +1,32 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { LogOut, Settings } from "lucide-react";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { clearSessionHint } from "@/lib/session";
+import { signOut } from "@/lib/api-client";
 
-/** 底部账户设置菜单。当前只有开发环境可见的“退出登录”。 */
 export const AccountMenu = () => {
   const router = useRouter();
+  const [pending, setPending] = useState(false);
 
-  if (process.env.NODE_ENV === "production") {
-    return null;
-  }
-
-  const handleLogout = () => {
-    clearSessionHint();
-    router.replace("/login");
+  const handleLogout = async () => {
+    setPending(true);
+    try {
+      await signOut();
+      router.replace("/login");
+    } catch {
+      toast.error("退出失败，请重试");
+    } finally {
+      setPending(false);
+    }
   };
 
   return (
@@ -40,10 +46,12 @@ export const AccountMenu = () => {
         sideOffset={6}
         className="w-36"
       >
-        <DropdownMenuItem className="text-xs" onSelect={handleLogout}>
-          <LogOut className="size-3.5" strokeWidth={1.75} />
-          退出登录
-        </DropdownMenuItem>
+        <DropdownMenuGroup>
+          <DropdownMenuItem className="text-xs" onSelect={() => void handleLogout()} disabled={pending}>
+            <LogOut />
+            退出登录
+          </DropdownMenuItem>
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

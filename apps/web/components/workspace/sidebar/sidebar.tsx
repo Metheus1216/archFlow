@@ -1,14 +1,19 @@
+"use client";
+
 import Link from "next/link";
 import { Sparkles } from "lucide-react";
-import type { ProjectNode } from "@arch-flow/shared";
 import { BrandMark } from "@/components/logo";
 import { CreateProjectButton } from "@/components/project/create-project-button";
 import { buttonVariants } from "@/components/ui/button";
+import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
 import { AccountMenu } from "./account-menu";
 import { ProjectList } from "./project-list";
 
-export const Sidebar = ({ projects }: { projects: ProjectNode[] }) => {
+export const Sidebar = () => {
+  const { user } = useAuth();
+  const username = user?.username ?? "个人空间";
+
   return (
     <aside className="flex h-full min-h-0 flex-col border-r border-border bg-background">
       <div className="shrink-0 px-4 pb-4 pt-5">
@@ -37,16 +42,16 @@ export const Sidebar = ({ projects }: { projects: ProjectNode[] }) => {
       <div className="mx-4 border-t border-border" />
 
       <nav className="arch-scrollbar min-h-0 flex-1 overflow-y-auto px-2 py-3">
-        <ProjectList initialProjects={projects} />
+        <ProjectList />
       </nav>
 
       <div className="shrink-0 border-t border-border p-3">
         <div className="flex items-center gap-2.5 rounded-md px-2 py-1.5">
           <div className="flex size-7 shrink-0 items-center justify-center rounded-full bg-secondary text-[10px] font-medium text-secondary-foreground">
-            AF
+            {Array.from(username)[0]}
           </div>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium">开发者</p>
+            <p className="truncate text-xs font-medium">{username}</p>
             <p className="truncate text-[10px] text-muted-foreground">
               个人空间
             </p>

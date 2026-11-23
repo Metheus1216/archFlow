@@ -1,10 +1,42 @@
+"use client";
+
+import { useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { BrandMark } from "@/components/logo";
 import { CreateProjectButton } from "@/components/project/create-project-button";
+import { SessionGate } from "@/components/session-gate";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { Button } from "@/components/ui/button";
+import { useProjects } from "@/hooks/use-projects";
 
-export const dynamic = "force-dynamic";
+const ProjectHome = () => {
+  const router = useRouter();
+  const projects = useProjects();
+  const firstProject = projects.data?.items[0];
+  const conversationId = firstProject?.lastActiveConversationId;
 
-const HomePage = () => {
+  useEffect(() => {
+    if (!firstProject) return;
+    router.replace(conversationId ? `/workspace?conversationId=${encodeURIComponent(conversationId)}` : "/workspace");
+  }, [conversationId, firstProject, router]);
+
+  if (projects.isPending || firstProject) {
+    return (
+      <main className="grid min-h-dvh place-content-center text-sm text-muted-foreground" role="status">
+        正在加载项目…
+      </main>
+    );
+  }
+
+  if (projects.isError) {
+    return (
+      <main className="grid min-h-dvh place-content-center justify-items-center gap-4" role="alert">
+        <p className="text-sm text-muted-foreground">项目加载失败</p>
+        <Button variant="outline" onClick={() => void projects.refetch()}>重试</Button>
+      </main>
+    );
+  }
+
   return (
     <main className="dot-grid mask-fade relative flex min-h-dvh items-center justify-center overflow-hidden bg-background px-6">
       <ThemeToggle className="absolute right-6 top-6" />
@@ -34,5 +66,7 @@ const HomePage = () => {
     </main>
   );
 };
+
+const HomePage = () => <SessionGate><ProjectHome /></SessionGate>;
 
 export default HomePage;
