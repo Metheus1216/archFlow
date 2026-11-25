@@ -6,6 +6,7 @@ import {
   ISODateTime,
   PaginationQuery,
 } from "./common.schema.js";
+import { DraftLayout, GraphWithLayoutInput } from "./conversation.schema.js";
 
 /** 资产元信息：列表项与详情共用。 */
 export const AssetMeta = z.object({
@@ -19,15 +20,15 @@ export type AssetMeta = z.infer<typeof AssetMeta>;
 /** 资产详情：元信息 + 图数据（原 AssetSchema 的 graphData）。 */
 export const Asset = AssetMeta.extend({
   graph: Graph,
+  layout: DraftLayout.optional(),
 });
 export type Asset = z.infer<typeof Asset>;
 
 /* ───────────────────────── 请求 DTO（§8） ───────────────────────── */
 
-/** 新建 / 保存资产（§8.2）：graph 走 GraphInput（512KB、≤6 层）。 */
-export const AssetInput = z.object({
+/** 新建 / 保存资产（§8.1）：图与坐标使用画布校验。 */
+export const AssetInput = GraphWithLayoutInput.safeExtend({
   name: z.string().trim().min(1).max(50),
-  graph: GraphInput,
 });
 export type AssetInput = z.infer<typeof AssetInput>;
 

@@ -78,6 +78,12 @@ export const RunAccepted = z.object({
 });
 export type RunAccepted = z.infer<typeof RunAccepted>;
 
+export const ActiveRun = z.object({
+  run: RunAccepted.nullable(),
+  latest: RunAccepted.nullable(),
+});
+export type ActiveRun = z.infer<typeof ActiveRun>;
+
 /** 取消响应（§5.4）：取消是异步的，返回当前状态。 */
 export const CancelResult = z.object({
   runId: Id,

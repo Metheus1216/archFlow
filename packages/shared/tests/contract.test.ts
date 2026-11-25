@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { z } from "zod";
-import { Graph, GraphInput, Interrupt, RunStatus, SseFrame } from "../src/index.js";
+import { AssetInput, Graph, GraphInput, Interrupt, RunStatus, SaveDraftInput, SseFrame } from "../src/index.js";
 
 const validGraph = {
   nodes: [
@@ -83,6 +83,33 @@ describe("Graph（P0-13）", () => {
 
     expect(result.success).toBe(false);
   });
+});
+
+describe("画布草稿布局", () => {
+  it("保留节点坐标，并接受未提供布局的整图保存请求", () => {
+    const layout = [{ nodeId: "node-web", x: -20.25, y: 0 }];
+    expect(SaveDraftInput.parse({ graph: validGraph, baseVersion: 3, layout })).toMatchObject({ layout });
+    expect(SaveDraftInput.parse({ graph: validGraph, baseVersion: 3 }).layout).toBeUndefined();
+  });
+
+  it.each([
+    [{ nodeId: "node-missing", x: 0, y: 0 }],
+    [{ nodeId: "node-web", x: 0, y: 0 }, { nodeId: "node-web", x: 16, y: 0 }],
+    [{ nodeId: "node-web", x: Number.POSITIVE_INFINITY, y: 0 }],
+  ].map((layout) => ({ layout })))("拒绝无效布局 $layout", ({ layout }) => {
+    expect(SaveDraftInput.safeParse({ graph: validGraph, baseVersion: 3, layout }).success).toBe(false);
+  });
+});
+
+it("保存资产时保留节点坐标并拒绝不在图中的位置", () => {
+  const input = { name: "当前架构", graph: validGraph };
+  const layout = [{ nodeId: "node-web", x: 45, y: -10 }];
+
+  expect(AssetInput.parse({ ...input, layout })).toMatchObject({ layout });
+  expect(AssetInput.safeParse({
+    ...input,
+    layout: [{ nodeId: "node-missing", x: 0, y: 0 }],
+  }).success).toBe(false);
 });
 
 describe("RunStatus / HITL 契约（P0-01）", () => {

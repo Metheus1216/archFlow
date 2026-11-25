@@ -1,10 +1,6 @@
 import { z } from "zod";
-import {
-  FileStatus,
-  FileType,
-  Id,
-  ISODateTime,
-} from "./common.schema.js";
+import { Id, ISODateTime } from "./common.schema.js";
+import { FileMeta } from "./knowledge.schema.js";
 
 /* ───────────────────────── 项目 ───────────────────────── */
 
@@ -19,13 +15,13 @@ export type Project = z.infer<typeof Project>;
 
 /* ───────────────────────── 侧边栏简要信息（§3.1） ───────────────────────── */
 
-export const FileBrief = z.object({
-  id: Id,
-  fileName: z.string(),
-  fileType: FileType,
-  status: FileStatus,
-  createdAt: ISODateTime,
-});
+export const FileBrief = FileMeta.pick({
+  id: true,
+  fileName: true,
+  fileType: true,
+  status: true,
+  createdAt: true,
+}).extend({ errorMessage: FileMeta.shape.errorMessage.optional() });
 export type FileBrief = z.infer<typeof FileBrief>;
 
 export const AssetBrief = z.object({
@@ -43,11 +39,13 @@ export const ConversationBrief = z.object({
 export type ConversationBrief = z.infer<typeof ConversationBrief>;
 
 /** 项目树节点：嵌套数组固定返回最近 20 条。 */
+export const PROJECT_TREE_ITEM_LIMIT = 20;
+
 export const ProjectNode = Project.extend({
   lastActiveConversationId: Id.nullable(),
-  files: z.array(FileBrief).max(20),
-  assets: z.array(AssetBrief).max(20),
-  conversations: z.array(ConversationBrief).max(20),
+  files: z.array(FileBrief).max(PROJECT_TREE_ITEM_LIMIT),
+  assets: z.array(AssetBrief).max(PROJECT_TREE_ITEM_LIMIT),
+  conversations: z.array(ConversationBrief).max(PROJECT_TREE_ITEM_LIMIT),
 });
 export type ProjectNode = z.infer<typeof ProjectNode>;
 

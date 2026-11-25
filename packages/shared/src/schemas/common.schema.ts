@@ -78,7 +78,7 @@ export const NodeType = z.enum([
 ]);
 export type NodeType = z.infer<typeof NodeType>;
 
-/** 图节点：坐标不入库，布局由前端 Dagre 计算。 */
+/** 图节点的语义字段。草稿节点位置使用 DraftLayout。 */
 export const GraphNode = z.strictObject({
   id: Id,
   type: NodeType,

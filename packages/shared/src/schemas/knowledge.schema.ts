@@ -8,6 +8,23 @@ import {
   PaginationQuery,
 } from "./common.schema.js";
 
+export const FILE_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+export const KNOWLEDGE_EMBEDDING_DIMENSIONS = 1536;
+export const FILE_UPLOAD_TYPES = {
+  ".md": { fileType: "text", mimeType: "text/markdown" },
+  ".markdown": { fileType: "text", mimeType: "text/markdown" },
+  ".txt": { fileType: "text", mimeType: "text/plain" },
+  ".png": { fileType: "image", mimeType: "image/png" },
+  ".jpg": { fileType: "image", mimeType: "image/jpeg" },
+  ".jpeg": { fileType: "image", mimeType: "image/jpeg" },
+  ".webp": { fileType: "image", mimeType: "image/webp" },
+  ".pdf": { fileType: "pdf", mimeType: "application/pdf" },
+  ".docx": { fileType: "docx", mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" },
+} as const satisfies Record<string, { fileType: FileType; mimeType: string }>;
+export const FILE_UPLOAD_EXTENSIONS = Object.keys(FILE_UPLOAD_TYPES);
+export const FileUploadName = z.string().trim().min(1).max(255).regex(/^[^/\\\p{Cc}]+$/u);
+export const FileUploadSize = Count.min(1).max(FILE_UPLOAD_MAX_BYTES);
+
 /** 知识库文件完整元信息（§7.3）；项目树里用精简的 FileBrief。 */
 export const FileMeta = z.object({
   id: Id,

@@ -73,6 +73,8 @@ export const SseFrame = z.discriminatedUnion("type", [
 ]);
 export type SseFrame = z.infer<typeof SseFrame>;
 
+export const LastEventId = z.string().regex(/^\d+$/).transform(Number).pipe(Count.max(2_147_483_647)).optional();
+
 /** 终止哨兵：收到 [DONE] 即停止解析，并重新拉一次消息列表拿权威数据。 */
 export const SSE_DONE = "[DONE]";
 

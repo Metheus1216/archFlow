@@ -14,6 +14,7 @@ import {
   SendMessageInput,
   SuggestedQuestions,
 } from "./conversation.schema.js";
+import { FileUploadName } from "./knowledge.schema.js";
 
 export const AGENT_HISTORY_LIMIT = 10;
 export const AGENT_PLAN_LIMIT = 6;
@@ -158,5 +159,6 @@ export const AgentKnowledgeQuery = z.strictObject({
   projectId: Id,
   attachments: AgentTurn.shape.attachments,
   query: AgentTask.shape.instruction,
+  fileNames: z.array(FileUploadName).optional(),
 });
 export type AgentKnowledgeQuery = z.infer<typeof AgentKnowledgeQuery>;

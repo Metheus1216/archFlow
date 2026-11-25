@@ -1,6 +1,8 @@
 import { z } from "zod";
-import { Id } from "./common.schema.js";
-import { Conversation, Message } from "./conversation.schema.js";
+import { AssetMeta } from "./asset.schema.js";
+import { Graph, Id, TraceId } from "./common.schema.js";
+import { Conversation, DraftLayout, ForkResult, Message } from "./conversation.schema.js";
+import { FileMeta, FileUploadSize } from "./knowledge.schema.js";
 import { MockStoredRun } from "./mock-run.schema.js";
 import { AgentCheckpoint, AgentConstraints, AgentTurn } from "./orchestration.schema.js";
 import { IdempotencyKey } from "./mock-auth.schema.js";
@@ -52,9 +54,14 @@ export const MockGraph = z.object({
 });
 export type MockGraph = z.infer<typeof MockGraph>;
 
+export const MockStoredMessage = Message.extend({
+  draftGraphAtSend: Conversation.shape.draftGraph.optional(),
+});
+export type MockStoredMessage = z.infer<typeof MockStoredMessage>;
+
 /** mock 库中的会话：真实会话字段 + 消息列表。 */
 export const MockConversationRecord = Conversation.extend({
-  messages: z.array(Message),
+  messages: z.array(MockStoredMessage),
   runs: z.array(MockStoredRun).optional(),
   titleManuallySet: z.boolean().optional(),
   agentConstraints: AgentConstraints.optional(),
@@ -71,13 +78,19 @@ export type MockConversationRecord = z.infer<typeof MockConversationRecord>;
 /** mock 库中的知识库文件：在 FileBrief 上补 projectId 便于按项目聚合。 */
 export const MockFileRecord = FileBrief.extend({
   projectId: Id,
+  upload: FileMeta.pick({ mimeType: true }).extend({
+    sizeBytes: FileUploadSize,
+    digest: z.string().regex(/^[a-f0-9]{64}$/),
+  }).optional(),
 });
 export type MockFileRecord = z.infer<typeof MockFileRecord>;
 
 /** mock 库中的架构资产：在 AssetBrief 上补 projectId 与固化时的画布快照。 */
 export const MockAssetRecord = AssetBrief.extend({
   projectId: Id,
-  graphData: MockGraph.nullable().default(null),
+  updatedAt: AssetMeta.shape.updatedAt.optional(),
+  graphData: z.union([Graph, MockGraph]).nullable().default(null),
+  layout: DraftLayout.optional(),
 });
 export type MockAssetRecord = z.infer<typeof MockAssetRecord>;
 
@@ -92,7 +105,21 @@ export const MockDatabase = z.object({
   })).default([]),
   files: z.array(MockFileRecord).default([]),
   assets: z.array(MockAssetRecord).default([]),
+  assetCreations: z.array(z.object({
+    projectId: Id,
+    key: IdempotencyKey,
+    hash: z.string(),
+    asset: AssetMeta,
+    traceId: TraceId,
+    expiresAt: z.number(),
+  })).default([]),
   conversations: z.array(MockConversationRecord),
+  conversationForks: z.array(z.object({
+    key: IdempotencyKey,
+    result: ForkResult,
+    traceId: TraceId,
+    expiresAt: z.number(),
+  })).default([]),
 });
 export type MockDatabase = z.infer<typeof MockDatabase>;
 

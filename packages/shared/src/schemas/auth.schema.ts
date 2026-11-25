@@ -9,6 +9,7 @@ export const Email = z
   .string()
   .trim()
   .toLowerCase()
+  .max(254)
   .pipe(z.email())
   .describe("邮箱（trim + 小写归一化后校验）");
 export type Email = z.infer<typeof Email>;

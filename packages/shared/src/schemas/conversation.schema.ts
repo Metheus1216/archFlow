@@ -3,6 +3,7 @@ import {
   CardKind,
   CardStatus,
   Count,
+  GRAPH_MAX_NODES,
   GraphInput,
   Id,
   ISODateTime,
@@ -29,8 +30,44 @@ export const LastMessage = z.object({
 });
 export type LastMessage = z.infer<typeof LastMessage>;
 
+const DraftCoordinate = z.number().min(-1_000_000).max(1_000_000);
+
+export const DraftLayout = z
+  .array(z.strictObject({ nodeId: Id, x: DraftCoordinate, y: DraftCoordinate }))
+  .max(GRAPH_MAX_NODES)
+  .superRefine((layout, ctx) => {
+    const seen = new Set<string>();
+    layout.forEach(({ nodeId }, index) => {
+      if (seen.has(nodeId)) {
+        ctx.addIssue({ code: "custom", path: [index, "nodeId"], message: "节点位置重复" });
+      }
+      seen.add(nodeId);
+    });
+  });
+export type DraftLayout = z.infer<typeof DraftLayout>;
+
+export const GraphWithLayoutInput = z
+  .object({
+    graph: GraphInput,
+    layout: DraftLayout.optional(),
+  })
+  .superRefine(({ graph, layout }, ctx) => {
+    if (!layout?.length) return;
+    const nodeIds = new Set(graph.nodes.map(({ id }) => id));
+    layout.forEach(({ nodeId }, index) => {
+      if (!nodeIds.has(nodeId)) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["layout", index, "nodeId"],
+          message: "画布中找不到这个节点",
+        });
+      }
+    });
+  });
+
 export const Conversation = ConversationMeta.extend({
   draftGraph: LooseGraph.nullable(),
+  draftLayout: DraftLayout.optional(),
   draftVersion: z.number().int().nonnegative(),
   messageCount: z.number().int().nonnegative(),
   lastMessage: LastMessage.nullable(),
@@ -117,8 +154,7 @@ export const UpdateConversationInput = z.object({
 });
 export type UpdateConversationInput = z.infer<typeof UpdateConversationInput>;
 
-export const SaveDraftInput = z.object({
-  graph: GraphInput,
+export const SaveDraftInput = GraphWithLayoutInput.safeExtend({
   baseVersion: z.number().int().nonnegative(),
 });
 export type SaveDraftInput = z.infer<typeof SaveDraftInput>;
@@ -147,6 +183,8 @@ export const AnswerCardInput = z.object({
   isCustom: z.boolean().default(false),
 });
 export type AnswerCardInput = z.infer<typeof AnswerCardInput>;
+
+export const FORK_MESSAGE_LIMIT = 200;
 
 export const ForkInput = z.object({
   sourceMessageId: Id,
