@@ -494,6 +494,7 @@ describe("ArchFlow execution", () => {
       {
         projectId: "project-1",
         attachments: ["file-1"],
+        fileNames: ["缓存规范"],
         query: expect.stringContaining("缓存规范"),
       },
       undefined,

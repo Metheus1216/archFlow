@@ -2,6 +2,7 @@ import {
   AGENT_CLARIFICATION_LIMIT,
   AgentExtras,
   AgentExtrasInput,
+  AgentKnowledgeQuery,
   AgentPlan,
   AgentResume,
   AgentTaskResult,
@@ -21,6 +22,7 @@ import {
   isCurrentGraphRequest,
   isHistoricalGraphRequest,
 } from "./graph-reference.js";
+import { parseKnowledgeRequest } from "./knowledge-request.js";
 import {
   AgentExecutionError,
   type AgentExecutionOptions,
@@ -363,10 +365,11 @@ export const createAgentEngine = (options: CreateAgentEngineOptions) => {
     const explicitGraphEvidenceQuery =
       (continuation && getExplicitGraphEvidenceQuery(continuation.answer)) ??
       getExplicitGraphEvidenceQuery(turn.input);
+    const requestedSource = parseKnowledgeRequest(latestInput) ?? parseKnowledgeRequest(turn.input);
     let graph: Graph | null = null;
     let workingGraph = context.draftGraph;
     let explanationRetried = false;
-    const evidenceByQuery = new Map<string, Citation[]>();
+    const evidenceByQuery = new Map<string, { citations: Citation[]; unavailableReason?: string }>();
     const priorResults: string[] = [];
     const citations = new Map<string, Citation>();
     const appendResult = async (text: string, streamed = "") => {
@@ -397,25 +400,31 @@ export const createAgentEngine = (options: CreateAgentEngineOptions) => {
         decision.knowledgeDependentIntents?.includes(task.intent) ||
         requiredGraphQuery !== undefined;
       let evidence: Citation[] = [];
+      let unavailableReason: string | undefined;
       if (isLookup || requiresKnowledge) {
         const query = requiredGraphQuery ?? task.instruction;
-        const cached = evidenceByQuery.get(query);
-        if (cached) {
-          evidence = cached;
-        } else {
+        let found = evidenceByQuery.get(query);
+        if (!found) {
           onStage?.("searching_knowledge");
-          const sources =
-            (await searchKnowledge?.(
-              {
-                projectId: turn.projectId,
-                attachments: turn.attachments,
-                query,
-              },
-              signal,
-            )) ?? [];
-          evidence = z.array(Citation).parse(sources);
-          evidenceByQuery.set(query, evidence);
+          const fileNames = requestedSource?.names.length ? requestedSource.names : parseKnowledgeRequest(query)?.names;
+          const lookup = AgentKnowledgeQuery.safeParse({
+            projectId: turn.projectId,
+            attachments: turn.attachments,
+            query,
+            ...(fileNames?.length ? { fileNames } : {}),
+          });
+          try {
+            const sources = lookup.success ? await searchKnowledge?.(lookup.data, signal) : undefined;
+            found = lookup.success ? { citations: z.array(Citation).parse(sources ?? []) }
+              : { citations: [], unavailableReason: "资料名称无法识别，请使用项目中显示的文件名。" };
+          } catch (error) {
+            if (!(error instanceof AgentExecutionError) || error.code !== ERROR_CODES.AGENT_KNOWLEDGE_REQUIRED) throw error;
+            found = { citations: [], unavailableReason: error.message };
+          }
+          evidenceByQuery.set(query, found);
         }
+        evidence = found.citations;
+        unavailableReason = found.unavailableReason;
       }
       if ((isLookup || requiresKnowledge) && evidence.length === 0) {
         if (!isLookup) {
@@ -424,11 +433,11 @@ export const createAgentEngine = (options: CreateAgentEngineOptions) => {
             : "需要资料的任务未执行。";
           throw new AgentExecutionError(
             ERROR_CODES.AGENT_KNOWLEDGE_REQUIRED,
-            `${blocked}${explanationPending ? EXPLANATION_PENDING : ""}${NO_EVIDENCE}`,
+            `${blocked}${explanationPending ? EXPLANATION_PENDING : ""}${unavailableReason ?? NO_EVIDENCE}`,
           );
         }
-        if (!priorResults.includes(NO_EVIDENCE))
-          await appendResult(NO_EVIDENCE);
+        const message = unavailableReason ?? NO_EVIDENCE;
+        if (!priorResults.includes(message)) await appendResult(message);
         continue;
       }
 

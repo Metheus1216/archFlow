@@ -289,14 +289,17 @@ export const createOpenAIAdapter = ({
       ),
   };
 
-  if (!embedding) return { model };
+  return { model, embed: embedding ? createOpenAIEmbedding(embedding) : undefined };
+};
+
+export const createOpenAIEmbedding = (embedding: ProviderConfig & { dimensions?: number }): AgentEmbedding => {
   const vectors = new OpenAI({
     apiKey: embedding.apiKey,
     baseURL: embedding.baseURL,
     timeout: 10_000,
     maxRetries: 0,
   });
-  const embed: AgentEmbedding = async (texts, signal) => {
+  return async (texts, signal) => {
     if (texts.length === 0) return [];
     const response = await vectors.embeddings.create(
       {
@@ -329,5 +332,4 @@ export const createOpenAIAdapter = ({
     }
     return ordered.map(({ embedding: vector }) => vector);
   };
-  return { model, embed };
 };

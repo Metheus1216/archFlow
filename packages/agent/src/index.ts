@@ -5,7 +5,8 @@ export {
   isCurrentGraphRequest,
   isHistoricalGraphRequest,
 } from "./graph-reference.js";
-export { createOpenAIAdapter } from "./llm/openai.js";
+export { createOpenAIAdapter, createOpenAIEmbedding } from "./llm/openai.js";
+export { KNOWLEDGE_FILE_EXTENSION, parseKnowledgeRequest } from "./knowledge-request.js";
 export { AgentExecutionError } from "./ports.js";
 export type {
   AgentEmbedding,
