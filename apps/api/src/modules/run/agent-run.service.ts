@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   HttpException,
+  type OnApplicationBootstrap,
   type OnModuleDestroy,
 } from "@nestjs/common";
 import {
@@ -14,21 +15,30 @@ import {
   ProjectEntity,
   RunEntity,
 } from "@arch-flow/db";
-import { AgentExecutionError, type createAgentEngine } from "@arch-flow/agent";
+import { AgentExecutionError, GRAPH_REFERENCE_QUESTION, type createAgentEngine } from "@arch-flow/agent";
 import {
+  ActiveRun,
   AGENT_HISTORY_LIMIT,
   AgentTurn,
   AgentTurnResult,
+  AnswerCardInput,
+  DraftLayout,
   ERROR_CODES,
   GraphInput,
+  IdempotencyKey,
   Interrupt,
   MessageMetadata,
+  RunAccepted,
   SendMessageInput,
+  runStreamUrl,
   type AgentResume,
+  type CardAnswer,
+  type ConstraintCard,
   type Run as RunResult,
 } from "@arch-flow/shared";
 import { type EntityManager, In } from "typeorm";
 import { DatabaseService } from "../../database/database.service.js";
+import { RESULT_FRAME_LIMIT, RunEvents } from "./run-events.js";
 import {
   RUN_ACTIVE_STATUSES,
   RunMetadata,
@@ -37,6 +47,7 @@ import {
   resourceId,
   runException,
   snapshotRun,
+  type RunSnapshot,
 } from "./run-store.js";
 
 export const RUN_ENGINE = Symbol("RUN_ENGINE");
@@ -46,6 +57,7 @@ const RUN_TIMEOUT_MS = 90_000;
 const LEASE_TIMEOUT_MS = RUN_TIMEOUT_MS + 30_000;
 const INTERRUPT_TIMEOUT_MS = 24 * 60 * 60_000;
 const EXTRAS_TIMEOUT_MS = 25_000;
+const PARTIAL_SAVE_INTERVAL_MS = 250;
 const DEFAULT_TITLE = "新会话";
 
 const digest = (value: unknown) =>
@@ -64,12 +76,33 @@ type ClaimedRun = {
   resume?: AgentResume;
   token: string;
   stateVersion: number;
+  snapshot: RunSnapshot;
+};
+
+export const acceptedRun = ({ id, userMessageId, assistantMessageId, status }: RunResult) =>
+  RunAccepted.parse({ runId: id, userMessageId, assistantMessageId, status, streamUrl: runStreamUrl(id) });
+
+const clarificationOptions = (checkpoint: AgentTurnResult & { status: "waiting_input" }) => {
+  if (checkpoint.checkpoint.question === GRAPH_REFERENCE_QUESTION) return [];
+  const conflict = checkpoint.checkpoint.conflictKey;
+  const decision = checkpoint.checkpoint.decision;
+  if (conflict) {
+    const values = [checkpoint.constraints[conflict], decision.constraintUpdates[conflict]];
+    return [...new Set(values.filter((value) => value !== undefined))].map((value) => ({ value, label: value }));
+  }
+  if (decision.intents.includes("generate_graph") && !checkpoint.constraints.projectGoal) {
+    return ["在线订单系统", "商品库存系统", "预约管理系统"].map((value) => ({ value, label: value }));
+  }
+  return [];
 };
 
 @Injectable()
-export class AgentRunService implements OnModuleDestroy {
+export class AgentRunService implements OnApplicationBootstrap, OnModuleDestroy {
   private readonly logger = new Logger(AgentRunService.name);
   private readonly running = new Map<string, AbortController>();
+  private readonly dispatched = new Map<string, Promise<void>>();
+  private closing = false;
+  readonly events = new RunEvents();
 
   constructor(
     @Inject(DatabaseService)
@@ -77,25 +110,20 @@ export class AgentRunService implements OnModuleDestroy {
     @Inject(RUN_ENGINE) private readonly engine: RunEngine | null,
   ) {}
 
-  /** A future HTTP adapter passes the owner ID from its authenticated principal. */
   accept = async (
     ownerId: string,
     conversationId: string,
     body: SendMessageInput,
     idempotencyKey: string,
+    traceId: string = randomUUID(),
   ): Promise<RunResult> => {
     const input = SendMessageInput.parse(body);
-    if (input.graphReferenceMessageId)
-      throw runException(
-        400,
-        ERROR_CODES.BAD_REQUEST,
-        "历史图提问请从本地工作台发起。",
-      );
-    const key = resourceId(idempotencyKey);
+    const key = IdempotencyKey.parse(idempotencyKey);
     const scopedOwner = resourceId(ownerId);
     const scope = { conversationId: resourceId(conversationId) };
     const attachments = [...new Set((input.attachments ?? []).map(resourceId))];
-    const hash = digest({ content: input.content, attachments });
+    const graphReferenceMessageId = input.graphReferenceMessageId && resourceId(input.graphReferenceMessageId);
+    const hash = digest({ content: input.content, attachments, graphReferenceMessageId });
 
     return this.database.dataSource.transaction(async (manager) => {
       const conversation = await getOwnedConversation(
@@ -104,33 +132,15 @@ export class AgentRunService implements OnModuleDestroy {
         scope,
       );
       const runs = manager.getRepository(RunEntity);
-      const replay = await runs
-        .createQueryBuilder("run")
-        .where("run.conversation_id = :conversationId", {
-          conversationId: conversation.id,
-        })
-        .andWhere("(run.metadata -> 'receipts') @> CAST(:receipt AS jsonb)", {
-          receipt: JSON.stringify([{ key }]),
-        })
-        .getOne();
+      const replay = await this.replay(manager, conversation, key, hash);
 
       if (replay) {
-        const metadata = RunMetadata.parse(replay.metadata);
-        if (
-          metadata.receipts.find((receipt) => receipt.key === key)?.hash !==
-          hash
-        ) {
-          throw runException(
-            409,
-            ERROR_CODES.IDEMPOTENCY_KEY_REUSED,
-            "该请求键已用于其他消息",
-          );
-        }
-        await this.expire(manager, replay);
         return (await snapshotRun(manager, replay, conversation)).run;
       }
 
       this.requireEngine();
+      if (graphReferenceMessageId)
+        await this.referencedGraph(manager, conversation.id, graphReferenceMessageId);
       const active = await runs.findOneBy({
         conversationId: conversation.id,
         status: In(RUN_ACTIVE_STATUSES),
@@ -149,6 +159,7 @@ export class AgentRunService implements OnModuleDestroy {
           );
         }
         metadata.receipts.push({ key, hash });
+        if (graphReferenceMessageId) metadata.graphReferenceMessageId = graphReferenceMessageId;
         await this.resumeLocked(
           manager,
           conversation,
@@ -178,24 +189,98 @@ export class AgentRunService implements OnModuleDestroy {
         conversationId: conversation.id,
         role: "user",
         content: input.content,
+        draftGraphContext: { graph: conversation.currentDraftGraph },
       });
       const assistant = await messages.save({
         conversationId: conversation.id,
         role: "assistant",
         content: "",
+        draftGraphContext: { graph: conversation.currentDraftGraph },
       });
       const run = await runs.save({
         conversationId: conversation.id,
         userMessageId: user.id,
         assistantMessageId: assistant.id,
         status: "queued",
-        metadata: RunMetadata.parse({ attachments, receipts: [{ key, hash }] }),
+        metadata: RunMetadata.parse({ attachments, graphReferenceMessageId, receipts: [{ key, hash }], traceId }),
       });
       await manager.update(ConversationEntity, conversation.id, {
         updatedAt: new Date(),
       });
       return (await snapshotRun(manager, run, conversation)).run;
     });
+  };
+
+  answerCard = async (
+    ownerId: string,
+    conversationId: string,
+    messageId: string,
+    body: AnswerCardInput,
+    key: string,
+  ): Promise<RunResult> => {
+    const input = AnswerCardInput.parse(body);
+    const messageUuid = resourceId(messageId);
+    const hash = digest({ messageUuid, input });
+    const result = await this.database.dataSource.transaction(async (manager) => {
+      const conversation = await getOwnedConversation(manager, resourceId(ownerId), { conversationId: resourceId(conversationId) });
+      const replay = await this.replay(manager, conversation, IdempotencyKey.parse(key), hash);
+      if (replay) return (await snapshotRun(manager, replay, conversation)).run;
+
+      const assistant = await manager.findOneBy(MessageEntity, { uuid: messageUuid, conversationId: conversation.id, role: "assistant" });
+      const card = MessageMetadata.parse(assistant?.metadata ?? {}).card;
+      const run = assistant && await manager.findOneBy(RunEntity, { assistantMessageId: assistant.id, conversationId: conversation.id });
+      if (!card || !run || (input.cardId !== undefined && input.cardId !== card.id))
+        throw runException(404, ERROR_CODES.CARD_NOT_FOUND, "追问卡片不存在");
+      const metadata = RunMetadata.parse(run.metadata);
+      if (await this.expire(manager, run) || card.status === "expired") return null;
+      if (card.status !== "pending") {
+        if (card.status === "answered" && digest(card.answer) === digest({ values: input.values, isCustom: input.isCustom }))
+          return (await snapshotRun(manager, run, conversation)).run;
+        throw notResumable();
+      }
+
+      const answer = this.cardAnswer(card, input);
+      this.requireEngine();
+      metadata.receipts.push({ key, hash });
+      await this.resumeLocked(manager, conversation, run, metadata, card.id, answer, { values: input.values, isCustom: input.isCustom });
+      return (await snapshotRun(manager, run, conversation)).run;
+    });
+    if (!result) throw runException(409, ERROR_CODES.CARD_EXPIRED, "这张追问卡片已过期，请重新发送请求");
+    return result;
+  };
+
+  private cardAnswer = (card: ConstraintCard, input: AnswerCardInput) => {
+    const { values, isCustom } = input;
+    const possible = new Map(card.options.map(({ value, label }) => [value, label]));
+    if (
+      new Set(values).size !== values.length ||
+      ((card.kind !== "multi" || isCustom) && values.length !== 1) ||
+      (!isCustom && card.kind !== "text" && values.some((value) => !possible.has(value)))
+    ) throw runException(422, ERROR_CODES.VALIDATION_FAILED, "请选择卡片提供的回答选项");
+    const answer = AgentTurn.shape.input.safeParse(values.map((value) => isCustom ? value : possible.get(value) ?? value).join("、"));
+    if (!answer.success) throw runException(422, ERROR_CODES.VALIDATION_FAILED, "回答太长，请缩短后重试");
+    return answer.data;
+  };
+
+  private replay = async (manager: EntityManager, conversation: ConversationEntity, key: string, hash: string) => {
+    const existing = await manager.getRepository(RunEntity).createQueryBuilder("run")
+      .where("run.conversation_id = :conversationId", { conversationId: conversation.id })
+      .andWhere("(run.metadata -> 'receipts') @> CAST(:receipt AS jsonb)", { receipt: JSON.stringify([{ key }]) })
+      .getOne();
+    if (existing) {
+      if (RunMetadata.parse(existing.metadata).receipts.find((receipt) => receipt.key === key)?.hash !== hash)
+        throw runException(409, ERROR_CODES.IDEMPOTENCY_KEY_REUSED, "该请求键已用于其他消息");
+      await this.expire(manager, existing);
+    }
+    return existing;
+  };
+
+  private referencedGraph = async (manager: EntityManager, conversationId: string, messageId: string) => {
+    const message = await manager.findOneBy(MessageEntity, { uuid: messageId, conversationId, role: "assistant" });
+    const graph = GraphInput.safeParse(message?.graphSnapshot);
+    if (!graph.success)
+      throw runException(404, ERROR_CODES.MESSAGE_NOT_FOUND, "找不到这张历史架构图，请从当前会话重新选择");
+    return { messageId, graph: graph.data };
   };
 
   resume = async (
@@ -256,6 +341,7 @@ export class AgentRunService implements OnModuleDestroy {
     metadata: RunMetadata,
     interruptId: string,
     answer: string,
+    cardAnswer: CardAnswer = { values: [answer], isCustom: true },
   ) => {
     if (
       run.status !== "waiting_input" ||
@@ -269,12 +355,13 @@ export class AgentRunService implements OnModuleDestroy {
       conversationId: conversation.id,
       role: "user",
       content: answer,
+      draftGraphContext: { graph: conversation.currentDraftGraph },
     });
     const { assistant } = await getRunMessages(manager, run);
     const messageMetadata = MessageMetadata.parse(assistant.metadata ?? {});
     if (messageMetadata.card) {
       messageMetadata.card.status = "answered";
-      messageMetadata.card.answer = { values: [answer], isCustom: true };
+      messageMetadata.card.answer = cardAnswer;
       messageMetadata.card.answeredAt = new Date().toISOString();
       await manager.update(MessageEntity, assistant.id, {
         metadata: messageMetadata,
@@ -298,7 +385,10 @@ export class AgentRunService implements OnModuleDestroy {
     const scope = { runId: resourceId(runId) };
     const scopedOwner = resourceId(ownerId);
     const claim = await this.claim(scopedOwner, scope);
-    if (!claim) return;
+    if (!claim) {
+      await this.publishResult(scopedOwner, scope.runId);
+      return;
+    }
 
     const controller = new AbortController();
     this.running.set(scope.runId, controller);
@@ -307,13 +397,46 @@ export class AgentRunService implements OnModuleDestroy {
       controller.signal,
       AbortSignal.timeout(RUN_TIMEOUT_MS),
     ]);
+    const { assistantMessageId } = claim.snapshot.run;
+    const traceId = claim.snapshot.traceId ?? randomUUID();
+    let lastSavedAt = 0;
+    let persistedText = "";
+    let receivedText: string | undefined;
+
+    const flushPartial = async () => {
+      const text = receivedText;
+      if (text === undefined || (lastSavedAt !== 0 && text === persistedText)) return;
+      const saved = await this.database.dataSource.transaction(async (manager) => {
+        const conversation = await getOwnedConversation(manager, scopedOwner, scope);
+        const run = await manager.findOneByOrFail(RunEntity, { uuid: scope.runId, conversationId: conversation.id });
+        if (!this.ownsClaim(run, claim)) return false;
+        await manager.update(MessageEntity, { id: run.assistantMessageId, conversationId: conversation.id }, { content: text });
+        return true;
+      });
+      if (!saved || controller.signal.aborted) return;
+      const replace = (!lastSavedAt && Boolean(claim.resume)) || !text.startsWith(persistedText);
+      this.events.publish(runId, {
+        type: "text-delta",
+        messageId: assistantMessageId,
+        content: replace ? text : text.slice(persistedText.length),
+        ...(replace ? { replace: true } : {}),
+      });
+      persistedText = text;
+      lastSavedAt = Date.now();
+    };
 
     try {
+      this.events.begin(claim.snapshot, traceId, claim.resume ? true : undefined);
       const result = AgentTurnResult.parse(
         await engine.execute(claim.turn, {
           resume: claim.resume,
           signal,
           deadlineAt,
+          onStage: (stage) => this.events.publish(runId, { type: "status", stage }),
+          onTextDelta: async (delta, replace) => {
+            receivedText = replace ? delta : (receivedText ?? "") + delta;
+            if (replace || Date.now() - lastSavedAt >= PARTIAL_SAVE_INTERVAL_MS) await flushPartial();
+          },
         }),
       );
       signal.throwIfAborted();
@@ -329,14 +452,25 @@ export class AgentRunService implements OnModuleDestroy {
         void finishExtras();
       }
     } catch (error) {
+      if (!controller.signal.aborted) {
+        try {
+          await flushPartial();
+        } catch {
+          this.logger.warn(`保存回答片段失败 runId=${scope.runId}`);
+        }
+      }
       const code =
         error instanceof AgentExecutionError
           ? error.code
-          : ERROR_CODES.SERVICE_UNAVAILABLE;
+          : signal.aborted && !controller.signal.aborted
+            ? ERROR_CODES.AGENT_TASK_TIMEOUT
+            : ERROR_CODES.SERVICE_UNAVAILABLE;
       const message =
         error instanceof AgentExecutionError
           ? error.message
-          : "架构生成暂时失败，请重试";
+          : code === ERROR_CODES.AGENT_TASK_TIMEOUT
+            ? "当前请求处理超时，请重试"
+            : "当前任务未完成，请重试";
       const detached =
         error instanceof HttpException && error.getStatus() === 404;
       if (!detached) {
@@ -353,6 +487,32 @@ export class AgentRunService implements OnModuleDestroy {
     } finally {
       this.running.delete(scope.runId);
     }
+    await this.publishResult(scopedOwner, scope.runId);
+  };
+
+  dispatch = (ownerId: string, run: RunResult) => {
+    if (run.status !== "queued" || this.closing) return;
+    const previous = this.dispatched.get(run.id);
+    const launch = async () => {
+      try {
+        await previous;
+        if (!this.closing) await this.execute(ownerId, run.id);
+      } catch {
+        this.logger.warn(`运行调度异常 runId=${run.id}`);
+      }
+    };
+    const queued = launch();
+    this.dispatched.set(run.id, queued);
+    const release = async () => {
+      await queued;
+      if (this.dispatched.get(run.id) === queued) this.dispatched.delete(run.id);
+    };
+    void release();
+  };
+
+  private publishResult = async (ownerId: string, runId: string) => {
+    const snapshot = await this.snapshot(ownerId, runId);
+    this.events.settle(snapshot, snapshot.traceId ?? randomUUID());
   };
 
   private claim = async (
@@ -417,6 +577,9 @@ export class AgentRunService implements OnModuleDestroy {
           .map(({ role, content }) => ({ role, content })),
         draftGraph: draft.data,
         draftVersion: conversation.draftVersion,
+        ...(metadata.graphReferenceMessageId ? {
+          referencedGraph: await this.referencedGraph(manager, conversation.id, metadata.graphReferenceMessageId),
+        } : {}),
         constraints: state?.constraintsData ?? {},
       });
       if (!parsedTurn.success) {
@@ -441,11 +604,13 @@ export class AgentRunService implements OnModuleDestroy {
       run.status = "running";
       run.metadata = metadata;
       await manager.save(RunEntity, run);
+      await manager.save(MessageEntity, { id: assistant.id, draftGraphContext: { graph: draft.data } });
       return {
         turn: parsedTurn.data,
         resume,
         token,
         stateVersion: state?.version ?? 0,
+        snapshot: await snapshotRun(manager, run, conversation),
       };
     });
   };
@@ -482,11 +647,14 @@ export class AgentRunService implements OnModuleDestroy {
           ? GraphInput.parse(result.graph)
           : null;
       if (graph) {
+        const nodeIds = new Set(graph.nodes.map(({ id }) => id));
+        const layout = DraftLayout.nullable().safeParse(conversation.currentDraftLayout);
         const saved = await manager.update(
           ConversationEntity,
           { id: conversation.id, draftVersion: claim.turn.draftVersion },
           {
             currentDraftGraph: graph,
+            currentDraftLayout: layout.data?.filter(({ nodeId }) => nodeIds.has(nodeId)) ?? null,
             draftVersion: claim.turn.draftVersion + 1,
             updatedAt: now,
           },
@@ -525,12 +693,13 @@ export class AgentRunService implements OnModuleDestroy {
             now.getTime() + INTERRUPT_TIMEOUT_MS,
           ).toISOString(),
         });
+        const options = clarificationOptions(result);
         messageMetadata.card = {
           id: interrupt.interruptId,
           messageId: assistant.uuid,
-          kind: "text",
+          kind: options.length ? "single" : "text",
           title: result.checkpoint.question,
-          options: [],
+          options,
           status: "pending",
           answer: null,
           createdAt: now.toISOString(),
@@ -544,6 +713,7 @@ export class AgentRunService implements OnModuleDestroy {
         delete metadata.response;
         metadata.interrupt = interrupt;
         metadata.checkpoint = result.checkpoint;
+        metadata.streamSequence = Math.max(metadata.streamSequence, this.events.sequence(run.uuid) + RESULT_FRAME_LIMIT);
         run.status = "waiting_input";
         run.metadata = metadata;
         await manager.save(RunEntity, run);
@@ -553,6 +723,7 @@ export class AgentRunService implements OnModuleDestroy {
       await manager.update(MessageEntity, assistant.id, {
         content: result.text,
         graphSnapshot: graph,
+        ...(graph ? { draftGraphContext: null } : {}),
         metadata: { ...messageMetadata, citations: result.citations },
       });
       await this.finish(manager, run, "succeeded");
@@ -562,6 +733,18 @@ export class AgentRunService implements OnModuleDestroy {
         title: conversation.title,
         updatedAt: now,
       };
+    });
+  };
+
+  active = async (ownerId: string, conversationId: string): Promise<ActiveRun> => {
+    return this.database.dataSource.transaction(async (manager) => {
+      const conversation = await getOwnedConversation(manager, resourceId(ownerId), { conversationId: resourceId(conversationId) });
+      const runs = manager.getRepository(RunEntity);
+      const latest = await runs.findOne({ where: { conversationId: conversation.id }, order: { id: "DESC" } });
+      if (!latest) return { run: null, latest: null };
+      await this.expire(manager, latest);
+      const handle = acceptedRun((await snapshotRun(manager, latest, conversation)).run);
+      return { run: RUN_ACTIVE_STATUSES.includes(latest.status) ? handle : null, latest: handle };
     });
   };
 
@@ -600,12 +783,32 @@ export class AgentRunService implements OnModuleDestroy {
         return (await snapshotRun(manager, run, conversation)).run;
       },
     );
-    if (accepted.status === "canceled") this.running.get(scope.runId)?.abort();
+    if (accepted.status === "canceled") {
+      this.running.get(scope.runId)?.abort();
+      await this.publishResult(resourceId(ownerId), scope.runId);
+    }
     return accepted;
   };
 
-  onModuleDestroy = () => {
+  onApplicationBootstrap = async () => {
+    const result = await this.database.dataSource.createQueryBuilder().update(RunEntity)
+      .set({
+        status: "failed",
+        finishReason: "error",
+        errorCode: ERROR_CODES.RUN_NOT_RESUMABLE,
+        errorMessage: "服务重启中断了这次任务，已保存的回答仍可查看。请重新发送。",
+        finishedAt: new Date(),
+        metadata: () => "metadata - 'lease' - 'checkpoint' - 'interrupt' - 'response'",
+      })
+      .where({ status: In(["queued", "running"]) })
+      .execute();
+    if (result.affected) this.logger.warn(`服务恢复了 ${result.affected} 条被中断的运行记录`);
+  };
+
+  onModuleDestroy = async () => {
+    this.closing = true;
     for (const controller of this.running.values()) controller.abort();
+    await Promise.allSettled(this.dispatched.values());
   };
 
   private requireEngine = (): RunEngine => {
@@ -671,6 +874,7 @@ export class AgentRunService implements OnModuleDestroy {
     delete metadata.interrupt;
     delete metadata.lease;
     delete metadata.response;
+    metadata.streamSequence = Math.max(metadata.streamSequence, this.events.sequence(run.uuid) + RESULT_FRAME_LIMIT);
     Object.assign(run, {
       status,
       metadata,

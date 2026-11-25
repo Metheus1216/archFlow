@@ -56,7 +56,8 @@ export class ZodValidationException extends Error {
 
         return (
           typeof params?.errorCode === "string" ||
-          issue.path[0] === "graph"
+          issue.path[0] === "graph" ||
+          issue.path[0] === "layout"
         );
       });
 

@@ -1,33 +1,33 @@
 import { Module } from "@nestjs/common";
-import { createAgentEngine, createOpenAIAdapter } from "@arch-flow/agent";
+import { createAgentEngine, createOpenAIAdapter, type AgentEmbedding } from "@arch-flow/agent";
 import { loadEnv } from "../../config/env.js";
 import { DatabaseService } from "../../database/database.service.js";
+import { AuthModule } from "../auth/auth.module.js";
+import { KNOWLEDGE_EMBEDDING } from "../knowledge/knowledge-embedding.js";
+import { KnowledgeModule } from "../knowledge/knowledge.module.js";
+import { AgentRunController } from "./agent-run.controller.js";
 import { AgentRunService, RUN_ENGINE } from "./agent-run.service.js";
 import { createKnowledgeSearch } from "./knowledge-search.js";
 
 @Module({
+  imports: [AuthModule, KnowledgeModule],
+  controllers: [AgentRunController],
   providers: [
     {
       provide: RUN_ENGINE,
-      inject: [DatabaseService],
-      useFactory: (database: DatabaseService) => {
+      inject: [DatabaseService, KNOWLEDGE_EMBEDDING],
+      useFactory: (database: DatabaseService, embedding: AgentEmbedding | null) => {
         const env = loadEnv();
         if (!env.OPENAI_API_KEY || !env.OPENAI_MODEL) return null;
 
-        const { model, embed } = createOpenAIAdapter({
+        const { model } = createOpenAIAdapter({
           chat: {
             apiKey: env.OPENAI_API_KEY,
             model: env.OPENAI_MODEL,
             baseURL: env.OPENAI_BASE_URL,
           },
-          embedding: env.OPENAI_EMBEDDING_MODEL
-            ? {
-                apiKey: env.OPENAI_EMBEDDING_API_KEY ?? env.OPENAI_API_KEY,
-                model: env.OPENAI_EMBEDDING_MODEL,
-                baseURL: env.OPENAI_EMBEDDING_BASE_URL ?? env.OPENAI_BASE_URL,
-              }
-            : undefined,
         });
+        const embed = embedding ?? undefined;
         return createAgentEngine({
           model,
           embed,

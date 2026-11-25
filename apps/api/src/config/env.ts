@@ -24,7 +24,11 @@ const EnvSchema = z.object({
     .enum(["development", "test", "production"])
     .default("development"),
   PORT: z.coerce.number().int().min(1).max(65535).default(3001),
+  HOST: z.string().min(1).default("127.0.0.1"),
   WEB_ORIGIN: z.string().min(1).default("http://localhost:3000"),
+  JWT_SECRET: OptionalString.pipe(
+    z.string().refine((secret) => Buffer.byteLength(secret, "utf8") >= 32, "JWT_SECRET 至少需要 32 字节").optional(),
+  ),
 
   DATABASE_URL: z
     .string()
@@ -45,6 +49,10 @@ const EnvSchema = z.object({
   OPENAI_EMBEDDING_API_KEY: OptionalString,
   OPENAI_EMBEDDING_BASE_URL: OptionalString,
   OPENAI_EMBEDDING_MODEL: OptionalString,
+}).superRefine((env, context) => {
+  if (env.NODE_ENV === "production" && !env.JWT_SECRET) {
+    context.addIssue({ code: "custom", path: ["JWT_SECRET"], message: "生产环境必须配置 JWT_SECRET" });
+  }
 });
 
 export type Env = z.infer<typeof EnvSchema>;

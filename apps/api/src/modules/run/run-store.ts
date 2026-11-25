@@ -8,10 +8,12 @@ import {
 import {
   AgentCheckpoint,
   AgentTurn,
+  Count,
   ERROR_CODES,
   Interrupt,
   Message,
   Run,
+  TraceId,
 } from "@arch-flow/shared";
 import { HttpException } from "@nestjs/common";
 import { type EntityManager, In } from "typeorm";
@@ -29,6 +31,9 @@ export const RunMetadata = z.looseObject({
   attachments: AgentTurn.shape.attachments.default([]),
   receipts: z.array(receipt).default([]),
   usedInterrupts: z.record(z.uuid(), z.string()).default({}),
+  graphReferenceMessageId: z.uuid().optional(),
+  traceId: TraceId.optional(),
+  streamSequence: Count.default(0),
   interrupt: Interrupt.optional(),
   checkpoint: AgentCheckpoint.optional(),
   response: z
@@ -133,5 +138,9 @@ export const snapshotRun = async (
     interrupt:
       run.status === "waiting_input" ? (metadata.interrupt ?? null) : null,
     draftVersion: conversation.draftVersion,
+    traceId: metadata.traceId,
+    streamSequence: metadata.streamSequence,
   };
 };
+
+export type RunSnapshot = Awaited<ReturnType<typeof snapshotRun>>;

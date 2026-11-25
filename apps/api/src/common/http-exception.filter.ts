@@ -6,7 +6,6 @@ import {
   type ExceptionFilter,
 } from "@nestjs/common";
 import { HttpAdapterHost } from "@nestjs/core";
-import { randomUUID } from "node:crypto";
 import type { Request } from "express";
 import { z } from "zod";
 import {
@@ -18,14 +17,13 @@ import {
   toFieldErrors,
   ZodValidationException,
 } from "./zod-validation.pipe.js";
+import { getTraceId } from "./api-response.js";
 
 type ErrorBody = {
   code: string;
   message: string;
   errors?: FieldError[];
 };
-
-const TRACE_ID_PATTERN = /^[A-Za-z0-9-]{8,64}$/;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null;
@@ -55,15 +53,6 @@ const statusCodeToErrorCode = (status: number): string => {
   }
 };
 
-const resolveTraceId = (request: Request): string => {
-  const header = request.headers["x-request-id"];
-  const candidate = Array.isArray(header) ? header[0] : header;
-
-  return typeof candidate === "string" && TRACE_ID_PATTERN.test(candidate)
-    ? candidate
-    : randomUUID();
-};
-
 /**
  * 全局异常出口：所有错误都返回 `{ code, message, data: null, errors?, traceId }`。
  *
@@ -82,8 +71,14 @@ export class HttpExceptionFilter implements ExceptionFilter {
     const context = host.switchToHttp();
     const request = context.getRequest<Request>();
     const response = context.getResponse();
-    const traceId = resolveTraceId(request);
+    if (httpAdapter.isHeadersSent(response)) return;
+
+    const traceId = getTraceId(request);
     const { status, body } = this.normalize(exception);
+    if (status === 413 && body.code === ERROR_CODES.PAYLOAD_TOO_LARGE && request.is("multipart/form-data")) {
+      body.code = ERROR_CODES.FILE_TOO_LARGE;
+      body.message = "文件超过上传大小限制。";
+    }
 
     if (status >= 500) {
       this.logger.error(
@@ -109,7 +104,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
   ): { status: number; body: ErrorBody } => {
     if (exception instanceof ZodValidationException) {
       return {
-        status: exception.graphError?.httpStatus ?? 400,
+        status: exception.graphError?.httpStatus ?? 422,
         body: {
           code:
             exception.graphError?.errorCode ??
