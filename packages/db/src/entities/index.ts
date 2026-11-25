@@ -2,6 +2,7 @@ import { AgentStateEntity } from "./agent-state.entity.js";
 import { AssetEntity } from "./asset.entity.js";
 import { ConversationEntity } from "./conversation.entity.js";
 import { DocumentChunkEntity } from "./document-chunk.entity.js";
+import { IdempotencyReceiptEntity } from "./idempotency-receipt.entity.js";
 import { KnowledgeFileEntity } from "./knowledge-file.entity.js";
 import { MessageEntity } from "./message.entity.js";
 import { ProjectEntity } from "./project.entity.js";
@@ -13,6 +14,7 @@ export { AssetEntity } from "./asset.entity.js";
 export { bigintNumberTransformer, UuidEntity } from "./base.entity.js";
 export { ConversationEntity } from "./conversation.entity.js";
 export { DocumentChunkEntity } from "./document-chunk.entity.js";
+export { IdempotencyReceiptEntity } from "./idempotency-receipt.entity.js";
 export { KnowledgeFileEntity } from "./knowledge-file.entity.js";
 export { MessageEntity } from "./message.entity.js";
 export { ProjectEntity } from "./project.entity.js";
@@ -22,6 +24,7 @@ export { UserEntity } from "./user.entity.js";
 /** TypeORM DataSource 注册用；顺序不影响建表，迁移 SQL 负责外键顺序。 */
 export const entities = [
   UserEntity,
+  IdempotencyReceiptEntity,
   ProjectEntity,
   KnowledgeFileEntity,
   DocumentChunkEntity,

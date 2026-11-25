@@ -12,4 +12,7 @@ export class AssetEntity extends UuidEntity {
 
   @Column({ name: "graph_data", type: "jsonb" })
   graphData!: Record<string, unknown>;
+
+  @Column({ name: "graph_layout", type: "jsonb", nullable: true })
+  graphLayout!: unknown[] | null;
 }

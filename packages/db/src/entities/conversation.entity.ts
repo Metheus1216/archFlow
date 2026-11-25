@@ -13,6 +13,9 @@ export class ConversationEntity extends UuidEntity {
   @Column({ name: "current_draft_graph", type: "jsonb", nullable: true })
   currentDraftGraph!: Record<string, unknown> | null;
 
+  @Column({ name: "current_draft_layout", type: "jsonb", nullable: true })
+  currentDraftLayout!: unknown[] | null;
+
   @Column({ name: "draft_version", type: "int", default: 0 })
   draftVersion!: number;
 }

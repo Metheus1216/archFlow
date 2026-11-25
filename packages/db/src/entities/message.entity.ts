@@ -18,4 +18,7 @@ export class MessageEntity extends UuidEntity {
 
   @Column({ name: "graph_snapshot", type: "jsonb", nullable: true })
   graphSnapshot!: Record<string, unknown> | null;
+
+  @Column({ name: "draft_graph_context", type: "jsonb", nullable: true })
+  draftGraphContext!: Record<string, unknown> | null;
 }
