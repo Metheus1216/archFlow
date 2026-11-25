@@ -10,7 +10,7 @@ export const ProjectList = () => {
 
   if (projects.isPending) return <p className="px-3 text-xs text-muted-foreground" role="status">正在加载项目…</p>;
 
-  if (projects.isError) {
+  if (projects.isLoadingError) {
     return (
       <div className="flex items-center justify-between gap-2 px-3" role="alert">
         <p className="text-xs text-muted-foreground">项目加载失败</p>

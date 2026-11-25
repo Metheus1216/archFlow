@@ -56,4 +56,15 @@ describe("chat graph reference submissions", () => {
     expect(changed.idempotencyKey).not.toBe(first.idempotencyKey);
     expect(removed.idempotencyKey).not.toBe(first.idempotencyKey);
   });
+
+  it("keeps separate retry identities for a selected card option and a typed answer", () => {
+    const reply = { ...input, interruptId: "card_1" };
+    const typed = prepareChatSubmission(reply, null);
+    const picked = prepareChatSubmission({ ...reply, cardMessageId: "assistant_1" }, typed);
+    const retry = prepareChatSubmission({ ...reply, cardMessageId: "assistant_1" }, picked);
+
+    expect(picked.cardMessageId).toBe("assistant_1");
+    expect(picked.idempotencyKey).not.toBe(typed.idempotencyKey);
+    expect(retry.idempotencyKey).toBe(picked.idempotencyKey);
+  });
 });

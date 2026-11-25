@@ -1,7 +1,8 @@
 import type {
   Message,
-  MockRunAccepted,
   MockSseFrame,
+  Run,
+  RunAccepted,
   RunStage,
   RunStatus,
 } from "@arch-flow/shared";
@@ -18,7 +19,7 @@ export const isRunInProgress = (status: RunStatus | undefined) =>
   status === "queued" || status === "running";
 
 export const createRunView = (
-  run: MockRunAccepted,
+  run: RunAccepted,
   createdAt = new Date().toISOString(),
 ): RunView => ({
   runId: run.runId,
@@ -35,23 +36,33 @@ export const createRunView = (
   error: null,
 });
 
+export const applyRunSnapshot = (
+  view: RunView,
+  run: Run,
+  assistantMessage?: Message,
+  stage: RunStage | null = null,
+): RunView => {
+  if (
+    run.id !== view.runId ||
+    run.assistantMessageId !== view.message.id ||
+    (assistantMessage && assistantMessage.id !== view.message.id)
+  ) {
+    throw new Error("任务快照与当前会话不匹配");
+  }
+  return {
+    ...view,
+    message: assistantMessage ?? view.message,
+    status: run.status,
+    stage,
+    error: run.error?.message ?? null,
+  };
+};
+
 export const applyRunFrame = (view: RunView, frame: MockSseFrame): RunView => {
   const { message } = view;
   switch (frame.type) {
     case "snapshot":
-      if (
-        frame.run.id !== view.runId ||
-        frame.assistantMessage.id !== message.id
-      ) {
-        throw new Error("任务快照与当前会话不匹配");
-      }
-      return {
-        ...view,
-        message: frame.assistantMessage,
-        status: frame.run.status,
-        stage: frame.stage,
-        error: frame.run.error?.message ?? null,
-      };
+      return applyRunSnapshot(view, frame.run, frame.assistantMessage, frame.stage);
     case "run-start":
       if (
         frame.runId !== view.runId ||
@@ -59,7 +70,18 @@ export const applyRunFrame = (view: RunView, frame: MockSseFrame): RunView => {
       ) {
         throw new Error("生成事件与当前会话不匹配");
       }
-      return { ...view, status: "running", stage: null, error: null };
+      return {
+        ...view,
+        message: frame.resume ? message : {
+          ...message,
+          content: "",
+          graphSnapshot: null,
+          metadata: null,
+        },
+        status: "running",
+        stage: null,
+        error: null,
+      };
     case "status":
       return { ...view, status: "running", stage: frame.stage };
     case "text-delta":

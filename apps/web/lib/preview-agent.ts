@@ -8,8 +8,10 @@ import {
 import { ERROR_CODES } from "@arch-flow/shared";
 import { createFixtureAgent } from "./fixture-agent";
 import { readMockDatabase, updateMockDatabase } from "./mock-db";
+import { createMockKnowledgeSearch } from "./mock-knowledge-search";
 import { MockRunError } from "./mock-run-data";
 import { createMockRunRuntime, type MockRunDriver } from "./mock-run-runtime";
+import { readMockTextUpload } from "./mock-upload-storage";
 
 const PREVIEW_AGENT_ENABLED =
   process.env.NODE_ENV === "development" &&
@@ -68,5 +70,8 @@ const shared = globalThis as typeof globalThis & {
 export const getMockRunRuntime = () =>
   (shared.archFlowMockRunRuntime ??= createMockRunRuntime(
     { read: readMockDatabase, update: updateMockDatabase },
-    PREVIEW_AGENT_ENABLED ? modelDriver : createFixtureAgent(),
+    PREVIEW_AGENT_ENABLED ? modelDriver : createFixtureAgent(createMockKnowledgeSearch({
+      readDatabase: readMockDatabase,
+      readText: readMockTextUpload,
+    })),
   ));

@@ -82,9 +82,46 @@ const readEnvelope = async (response: Response): Promise<ApiEnvelope> => {
 };
 
 const MOCK_ROOT = "/api/mock/";
-const AUTH_ROOT = `${MOCK_ROOT}auth/`;
-const AUTH_LOCK = "archflow-mock-auth";
+const FORMAL_ROOT = "/api/v1/";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 const AUTH_TIMEOUT_MS = 12_000;
+
+const readFormalApiOrigin = (baseUrl: string) => {
+  const error = new Error(
+    "NEXT_PUBLIC_API_BASE_URL 必须是以 /api/v1 结尾的 HTTPS 地址或本机 HTTP 地址。",
+  );
+  if (!/^https?:\/\/[^\s\\?#]+$/.test(baseUrl)) throw error;
+
+  let url: URL;
+  try {
+    url = new URL(baseUrl);
+  } catch {
+    throw error;
+  }
+
+  if (
+    url.username ||
+    url.password ||
+    (url.protocol === "http:" && !LOOPBACK_HOSTS.has(url.hostname)) ||
+    (url.pathname !== FORMAL_ROOT && url.pathname !== FORMAL_ROOT.slice(0, -1))
+  ) throw error;
+
+  return url.origin;
+};
+
+const CONFIGURED_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+const FORMAL_API_ORIGIN = CONFIGURED_API_BASE_URL
+  ? readFormalApiOrigin(CONFIGURED_API_BASE_URL)
+  : null;
+export const FORMAL_API_ENABLED = FORMAL_API_ORIGIN !== null;
+const API_ROOT = FORMAL_API_ENABLED ? FORMAL_ROOT : MOCK_ROOT;
+const AUTH_ROOT = `${API_ROOT}auth/`;
+const AUTH_LOCK = FORMAL_API_ORIGIN
+  ? `archflow-auth:${FORMAL_API_ORIGIN}${FORMAL_ROOT}`
+  : "archflow-mock-auth";
+
+export const apiPath = (path: `/${string}`): string =>
+  `${FORMAL_API_ORIGIN ?? ""}${API_ROOT}${path.slice(1)}`;
 
 type AuthState =
   | { status: "checking" | "anonymous"; user: null }
@@ -158,10 +195,15 @@ const getBrowserOrigin = () => {
   return origin;
 };
 
+const getApiOrigin = () => {
+  const browserOrigin = getBrowserOrigin();
+  return FORMAL_API_ORIGIN ?? browserOrigin;
+};
+
 const fetchAuth = (action: string, init?: RequestInit) =>
-  fetch(new URL(`${AUTH_ROOT}${action}`, getBrowserOrigin()).href, {
+  fetch(new URL(`${AUTH_ROOT}${action}`, getApiOrigin()).href, {
     ...init,
-    credentials: "same-origin",
+    credentials: FORMAL_API_ENABLED ? "include" : "same-origin",
     redirect: "error",
     cache: "no-store",
     signal: AbortSignal.timeout(AUTH_TIMEOUT_MS),
@@ -277,10 +319,19 @@ export const signOut = () => runAuthExclusive(async () => {
 });
 
 export const authenticatedFetch = async (input: string, init?: RequestInit): Promise<Response> => {
-  const origin = getBrowserOrigin();
+  const origin = getApiOrigin();
   const target = new URL(input, origin);
-  if (target.origin !== origin || !target.pathname.startsWith(MOCK_ROOT) || target.pathname.startsWith(AUTH_ROOT)) {
-    throw new Error("请求目标不属于受信任的本地 API");
+  if (
+    target.origin !== origin ||
+    target.username ||
+    target.password ||
+    target.hash ||
+    !target.pathname.startsWith(API_ROOT) ||
+    target.pathname === AUTH_ROOT.slice(0, -1) ||
+    target.pathname.startsWith(AUTH_ROOT) ||
+    /%|\/\//.test(target.pathname)
+  ) {
+    throw new Error("请求目标不属于受信任的 API");
   }
 
   const epoch = authEpoch;
@@ -289,7 +340,13 @@ export const authenticatedFetch = async (input: string, init?: RequestInit): Pro
     const headers = new Headers(init?.headers);
     if (token) headers.set("Authorization", `Bearer ${token}`);
     else headers.delete("Authorization");
-    return fetch(target.href, { ...init, headers, credentials: "same-origin", redirect: "error", cache: "no-store" });
+    return fetch(target.href, {
+      ...init,
+      headers,
+      credentials: FORMAL_API_ENABLED ? "omit" : "same-origin",
+      redirect: "error",
+      cache: "no-store",
+    });
   };
   const ensureCurrent = () => {
     if (epoch !== authEpoch) throw new DOMException("登录会话已切换", "AbortError");
@@ -344,7 +401,7 @@ export const requestApi = async <T>(
 ): Promise<T> => {
   const headers = new Headers(init?.headers);
 
-  if (init?.body && !headers.has("Content-Type")) {
+  if (init?.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
 

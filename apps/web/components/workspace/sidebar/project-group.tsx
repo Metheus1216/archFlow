@@ -1,27 +1,29 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import type { ProjectNode } from "@arch-flow/shared";
 import {
   useDeleteAsset,
-  useDeleteFile,
   useDeleteProject,
 } from "@/hooks/use-delete-project-items";
+import { AssetPreviewDialog } from "./asset-preview-dialog";
 import { CollapsibleSection } from "./collapsible-section";
 import { ConversationLink } from "./conversation-link";
 import { ItemActionsMenu } from "./item-actions-menu";
 import { NewConversationButton } from "./new-conversation-button";
+import { ProjectKnowledgeSection } from "./project-knowledge-section";
 
 type SectionItemProps = {
   label: string;
   onDelete: () => void;
+  children?: ReactNode;
 };
 
-const SectionItem = ({ label, onDelete }: SectionItemProps) => (
+const SectionItem = ({ label, onDelete, children }: SectionItemProps) => (
   <div className="group/item flex h-7 items-center rounded-md pl-8 pr-1 text-[11px] text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground">
-    <span className="min-w-0 flex-1 truncate">{label}</span>
+    {children ?? <span className="min-w-0 flex-1 truncate">{label}</span>}
     <ItemActionsMenu itemName={label} onDelete={onDelete} />
   </div>
 );
@@ -31,7 +33,6 @@ export const ProjectGroup = ({ project }: { project: ProjectNode }) => {
   const searchParams = useSearchParams();
   const activeConversationId = searchParams.get("conversationId");
   const deleteProject = useDeleteProject();
-  const deleteFile = useDeleteFile();
   const deleteAsset = useDeleteAsset();
   const Chevron = open ? ChevronDown : ChevronRight;
 
@@ -66,21 +67,7 @@ export const ProjectGroup = ({ project }: { project: ProjectNode }) => {
 
       {open && (
         <div className="space-y-1">
-          <CollapsibleSection kind="knowledge" label="知识库">
-            {project.files.map((file) => (
-              <SectionItem
-                key={file.id}
-                label={file.fileName}
-                onDelete={() =>
-                  deleteFile.mutate({
-                    projectId: project.id,
-                    fileId: file.id,
-                    name: file.fileName,
-                  })
-                }
-              />
-            ))}
-          </CollapsibleSection>
+          <ProjectKnowledgeSection project={project} />
 
           <CollapsibleSection kind="assets" label="资产库">
             {project.assets.map((asset) => (
@@ -94,7 +81,9 @@ export const ProjectGroup = ({ project }: { project: ProjectNode }) => {
                     name: asset.name,
                   })
                 }
-              />
+              >
+                <AssetPreviewDialog projectId={project.id} asset={asset} />
+              </SectionItem>
             ))}
           </CollapsibleSection>
 

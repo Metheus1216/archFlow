@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   ERROR_CODES,
-  GraphInput,
-  MockGraph,
+  Message,
   Run,
   mockRunStreamUrl,
   type AgentTurn,
-  type LooseGraph,
-  type Message,
   type MockConversationRecord,
   type MockDatabase,
   type MockRunAccepted,
   type MockRunSnapshot,
+  type MockStoredMessage,
   type MockStoredRun,
 } from "@arch-flow/shared";
+import { readMockGraph } from "./read-mock-graph";
 
 export class MockRunError extends Error {
   constructor(
@@ -72,6 +72,28 @@ export const makeRunMessage = (
   createdAt: new Date().toISOString(),
 });
 
+export const getHistoricalDraft = (messages: MockStoredMessage[]) => {
+  const latest = messages.findLast(
+    ({ graphSnapshot, draftGraphAtSend }) => graphSnapshot !== null || draftGraphAtSend !== undefined,
+  );
+  return latest?.graphSnapshot ?? latest?.draftGraphAtSend ?? null;
+};
+
+export const getDraftChange = (
+  { draftGraph, messages }: MockConversationRecord,
+  precedingMessages = messages,
+) => isDeepStrictEqual(draftGraph, getHistoricalDraft(precedingMessages))
+  ? undefined
+  : draftGraph;
+
+export const makeUserMessage = (
+  conversation: MockConversationRecord,
+  content: string,
+): MockStoredMessage => ({
+  ...makeRunMessage("user", content),
+  draftGraphAtSend: getDraftChange(conversation),
+});
+
 export const updateConversationMessages = (
   conversation: MockConversationRecord,
   last: Message,
@@ -102,50 +124,9 @@ export const snapshotRun = (
   run: MockStoredRun,
 ): MockRunSnapshot => ({
   run: Run.parse(run),
-  assistantMessage: getRunMessage(conversation, run.assistantMessageId),
+  assistantMessage: Message.parse(getRunMessage(conversation, run.assistantMessageId)),
   stage: run.stage,
 });
-
-const SVG_COORDINATE = String.raw`([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)`;
-const SVG_POINT = String.raw`${SVG_COORDINATE}(?:\s*,\s*|\s+)${SVG_COORDINATE}`;
-const SVG_STRAIGHT_EDGE = new RegExp(
-  String.raw`^M\s*${SVG_POINT}\s*L\s*${SVG_POINT}$`,
-  "u",
-);
-
-export const readMockGraph = (graph: LooseGraph | null): GraphInput | null => {
-  const canonical = GraphInput.safeParse(graph);
-  if (canonical.success) return canonical.data;
-
-  const legacy = MockGraph.safeParse(graph);
-  if (!legacy.success) return null;
-  const { nodes, edges } = legacy.data;
-  const nodesByPosition = new Map(
-    nodes.map(({ id, left, top }) => [`${left} ${top}`, id]),
-  );
-  if (nodesByPosition.size !== nodes.length) return null;
-
-  const convertedEdges = edges.flatMap(({ id, path }) => {
-    const coordinates = SVG_STRAIGHT_EDGE.exec(path.trim());
-    if (!coordinates) return [];
-    const [, startX, startY, endX, endY] = coordinates;
-    const source = nodesByPosition.get(`${Number(startX)} ${Number(startY)}`);
-    const target = nodesByPosition.get(`${Number(endX)} ${Number(endY)}`);
-    return source && target ? [{ id, source, target }] : [];
-  });
-  if (convertedEdges.length !== edges.length) return null;
-
-  const converted = GraphInput.safeParse({
-    nodes: nodes.map(({ id, kind, label, meta }) => ({
-      id,
-      type: kind,
-      label,
-      description: meta ?? undefined,
-    })),
-    edges: convertedEdges,
-  });
-  return converted.success ? converted.data : null;
-};
 
 export const getReferencedGraph = (
   conversation: MockConversationRecord,

@@ -2,7 +2,7 @@ import {
   EventStreamContentType,
   fetchEventSource,
 } from "@microsoft/fetch-event-source";
-import { parseMockSseData, type MockSseFrame } from "@arch-flow/shared";
+import { parseMockSseData, parseSseData, type MockSseFrame } from "@arch-flow/shared";
 import { authenticatedFetch } from "./api-client";
 
 const SAFE_STREAM_URL = /^\/api\/(?:mock|v1)\/runs\/[A-Za-z0-9_-]+\/stream$/;
@@ -56,6 +56,7 @@ export const connectRunStream = async (
   if (!SAFE_STREAM_URL.test(streamUrl))
     throw new Error("生成任务的订阅地址无效");
 
+  const parseFrame = streamUrl.startsWith("/api/v1/") ? parseSseData : parseMockSseData;
   let lastApplied: number | undefined;
   let outcome: StreamOutcome | undefined;
   for (let attempt = 0; !signal.aborted; attempt += 1) {
@@ -101,7 +102,7 @@ export const connectRunStream = async (
           if (controller.signal.aborted) return;
           resetIdle();
           if (!data) return;
-          const frame = parseMockSseData(data);
+          const frame = parseFrame(data);
           if (!frame) return;
           const sequence = Number(id);
           if (!/^\d+$/.test(id) || !Number.isSafeInteger(sequence)) {

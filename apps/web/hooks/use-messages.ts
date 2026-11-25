@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useLayoutEffect, useRef, useState } from "react";
 import type { Message, Page } from "@arch-flow/shared";
-import { requestApi } from "@/lib/api-client";
+import { apiPath, requestApi } from "@/lib/api-client";
 import { messagesQueryKey } from "@/lib/query-keys";
 
 type MessageHistory = {
@@ -14,7 +14,7 @@ type MessageHistory = {
   status: "loading" | "loaded" | "error";
 };
 
-const getMessagePage = (
+export const getMessagePage = (
   conversationId: string,
   signal: AbortSignal,
   cursor?: string,
@@ -22,7 +22,7 @@ const getMessagePage = (
   const params = new URLSearchParams({ limit: "50", direction: "backward" });
   if (cursor) params.set("cursor", cursor);
   return requestApi<Page<Message>>(
-    `/api/mock/conversations/${conversationId}/messages?${params}`,
+    apiPath(`/conversations/${encodeURIComponent(conversationId)}/messages?${params}`),
     { signal },
   );
 };

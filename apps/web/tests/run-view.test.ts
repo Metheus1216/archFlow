@@ -50,7 +50,11 @@ describe("run view", () => {
   });
 
   it("keeps the same assistant message when a question is answered", () => {
-    const started = createRunView(accepted, CREATED_AT);
+    const started = applyRunFrame(createRunView(accepted, CREATED_AT), {
+      type: "text-delta",
+      messageId: "assistant_1",
+      content: "要给什么系统画图？",
+    });
     const paused = applyRunFrame(started, {
       type: "interrupt",
       interruptId: "card_1",
@@ -72,6 +76,7 @@ describe("run view", () => {
     expect(paused.status).toBe("waiting_input");
     expect(resumed.status).toBe("running");
     expect(resumed.message.id).toBe("assistant_1");
+    expect(resumed.message.content).toBe("要给什么系统画图？");
     expect(
       applyRunFrame(resumed, {
         type: "done",
@@ -79,5 +84,24 @@ describe("run view", () => {
         finishReason: "canceled",
       }).status,
     ).toBe("canceled");
+  });
+
+  it("clears a stale running view before rebuilding it from authoritative frames", () => {
+    const partial = applyRunFrame(createRunView(accepted, CREATED_AT), {
+      type: "text-delta",
+      messageId: "assistant_1",
+      content: "连接中断前的文字",
+    });
+    const reset = applyRunFrame(partial, {
+      type: "run-start",
+      runId: "run_1",
+      conversationId: "conversation_1",
+      userMessageId: "user_1",
+      assistantMessageId: "assistant_1",
+      traceId: "trace-123",
+    });
+
+    expect(reset.message.content).toBe("");
+    expect(reset.status).toBe("running");
   });
 });

@@ -20,12 +20,13 @@ export const mockOk = <T>(
   schema: z.ZodType<T>,
   data: T,
   status = 200,
+  traceId: string = crypto.randomUUID(),
 ): NextResponse => {
   const envelope = ApiResponseSchema(schema).parse({
     code: ERROR_CODES.OK,
     message: "success",
     data,
-    traceId: crypto.randomUUID(),
+    traceId,
   });
 
   return NextResponse.json(envelope, { status, headers: { "Cache-Control": "no-store" } });

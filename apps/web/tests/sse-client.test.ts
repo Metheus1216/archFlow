@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { connectRunStream } from "../lib/sse-client";
 
 const STREAM_URL = "/api/mock/runs/run_1/stream";
+const FORMAL_STREAM_URL = "/api/v1/runs/run_1/stream";
 
 vi.mock("../lib/api-client", () => ({
   authenticatedFetch: (input: string, init?: RequestInit) => fetch(input, init),
@@ -103,5 +104,55 @@ describe("run stream", () => {
 
     expect(onFrame).toHaveBeenCalledWith(pause);
     expect(fetchStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts only formal replay frames on the v1 stream and sends the last applied cursor", async () => {
+    const savedDelta = { ...delta("数据库正文"), replace: true };
+    const start = {
+      type: "run-start",
+      runId: "run_1",
+      conversationId: "conversation_1",
+      userMessageId: "user_1",
+      assistantMessageId: "assistant_1",
+      traceId: "trace-123",
+    };
+    const mockSnapshot = {
+      type: "snapshot",
+      run: {
+        id: "run_1",
+        conversationId: "conversation_1",
+        userMessageId: "user_1",
+        assistantMessageId: "assistant_1",
+        status: "succeeded",
+        finishReason: "stop",
+        createdAt: "2026-11-24T00:00:00.000Z",
+        finishedAt: "2026-11-24T00:00:00.000Z",
+        error: null,
+      },
+      assistantMessage: {
+        id: "assistant_1",
+        role: "assistant",
+        content: "Mock 私有快照",
+        graphSnapshot: null,
+        metadata: null,
+        createdAt: "2026-11-24T00:00:00.000Z",
+      },
+      stage: null,
+    };
+    const fetchStream = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(event(1, delta("正文片段")) + event(2, mockSnapshot)))
+      .mockResolvedValueOnce(response(event(3, start) + event(4, savedDelta) + event(5, done)));
+    vi.stubGlobal("fetch", fetchStream);
+    const onFrame = vi.fn();
+
+    await expect(connectRunStream(FORMAL_STREAM_URL, {
+      signal: new AbortController().signal,
+      onFrame,
+    })).resolves.toBe("terminal");
+
+    expect(new Headers(fetchStream.mock.calls[1]?.[1]?.headers).get("Last-Event-ID")).toBe("1");
+    expect(onFrame.mock.calls.map(([frame]) => frame)).toEqual([
+      delta("正文片段"), start, savedDelta, done,
+    ]);
   });
 });

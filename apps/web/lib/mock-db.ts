@@ -1,30 +1,47 @@
 import "server-only";
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import {
+  CreateConversationInput,
+  ERROR_CODES,
+  FORK_MESSAGE_LIMIT,
+  Message,
   MockAccountId,
   MockDatabase,
+  PROJECT_TREE_ITEM_LIMIT,
   type AssetBrief,
+  type AssetInput,
+  type AssetMeta,
   type Conversation,
   type ConversationBrief,
-  type CreateConversationInput,
   type CreateProjectInput,
   type FileBrief,
-  type Message,
+  type ForkInput,
   type MessageListQuery,
   type MockAssetRecord,
   type MockConversationRecord,
   type MockFileRecord,
   type MockGraph,
+  type MockStoredMessage,
   type Page,
   type Project,
   type ProjectNode,
+  type SaveDraftInput,
+  type SaveDraftResult,
   type SendMessageInput,
 } from "@arch-flow/shared";
 import { getMockDir, readMockJson, withMockFileWrite, writeMockJson } from "./mock-files";
+import { discardMockUpload } from "./mock-upload-storage";
+import {
+  getHistoricalDraft,
+  getRunConversation,
+  makeUserMessage,
+  MockRunError,
+  updateConversationMessages,
+} from "./mock-run-data";
 
-const PROJECT_CREATE_KEY_MS = 24 * 60 * 60 * 1000;
+const CREATE_KEY_TTL_MS = 24 * 60 * 60 * 1000;
 const getUserMockPath = (userId: string) =>
   path.join(getMockDir(), "users", `${MockAccountId.parse(userId)}.json`);
 const emptyDatabase = () => MockDatabase.parse({ projects: [], conversations: [] });
@@ -34,12 +51,12 @@ export const readMockDatabase = (userId: string): Promise<MockDatabase> =>
 
 export const updateMockDatabase = async <T>(
   userId: string,
-  mutate: (database: MockDatabase) => T,
+  mutate: (database: MockDatabase) => T | Promise<T>,
 ): Promise<T> => {
   const filePath = getUserMockPath(userId);
   return withMockFileWrite(filePath, async () => {
     const database = await readMockJson(filePath, MockDatabase, emptyDatabase);
-    const result = mutate(database);
+    const result = await mutate(database);
     await writeMockJson(filePath, MockDatabase, database);
     return result;
   });
@@ -117,6 +134,7 @@ export const toMockConversation = (
   projectId: conversation.projectId,
   title: conversation.title,
   draftGraph: conversation.draftGraph,
+  draftLayout: conversation.draftLayout,
   draftVersion: conversation.draftVersion,
   messageCount: conversation.messageCount,
   lastMessage: conversation.lastMessage,
@@ -129,6 +147,7 @@ const toFileBrief = (file: MockFileRecord): FileBrief => ({
   fileName: file.fileName,
   fileType: file.fileType,
   status: file.status,
+  errorMessage: file.errorMessage,
   createdAt: file.createdAt,
 });
 
@@ -136,6 +155,11 @@ const toAssetBrief = (asset: MockAssetRecord): AssetBrief => ({
   id: asset.id,
   name: asset.name,
   createdAt: asset.createdAt,
+});
+
+export const toAssetMeta = (asset: MockAssetRecord): AssetMeta => ({
+  ...toAssetBrief(asset),
+  updatedAt: asset.updatedAt ?? asset.createdAt,
 });
 
 const sortByUpdatedAtDesc = (
@@ -158,9 +182,10 @@ const toProjectNode = (
   return {
     ...project,
     lastActiveConversationId: sortedConversations[0]?.id ?? null,
-    files: sortByCreatedAtDesc(files).slice(0, 20).map(toFileBrief),
-    assets: sortByCreatedAtDesc(assets).slice(0, 20).map(toAssetBrief),
-    conversations: sortedConversations.slice(0, 20).map(toConversationBrief),
+    files: sortByCreatedAtDesc(files.filter(({ upload }) => upload !== undefined))
+      .slice(0, PROJECT_TREE_ITEM_LIMIT).map(toFileBrief),
+    assets: sortByCreatedAtDesc(assets).slice(0, PROJECT_TREE_ITEM_LIMIT).map(toAssetBrief),
+    conversations: sortedConversations.slice(0, PROJECT_TREE_ITEM_LIMIT).map(toConversationBrief),
   };
 };
 
@@ -197,7 +222,6 @@ export const createProject = async (
     const timestamp = new Date(now).toISOString();
     const projectId = randomUUID();
     const conversationId = randomUUID();
-    const fileId = randomUUID();
     const assetId = randomUUID();
 
     const project: Project = {
@@ -206,16 +230,6 @@ export const createProject = async (
       description: input.description ?? null,
       createdAt: timestamp,
       updatedAt: timestamp,
-    };
-
-    /** 知识库骨架：挂一个可点击的示例文件，便于验证文件操作菜单。 */
-    const file: MockFileRecord = {
-      id: fileId,
-      projectId,
-      fileName: "需求说明.md",
-      fileType: "text",
-      status: "ready",
-      createdAt: timestamp,
     };
 
     /** 资产库骨架：挂一个示例资产，便于验证资产操作菜单。 */
@@ -242,18 +256,79 @@ export const createProject = async (
     };
 
     database.projects.push(project);
-    database.files.push(file);
     database.assets.push(asset);
     database.conversations.push(conversation);
-    const result = toProjectNode(project, [conversation], [file], [asset]);
+    const result = toProjectNode(project, [conversation], [], [asset]);
     database.projectCreations.push({
       key: idempotencyKey,
       input,
       project: result,
-      expiresAt: now + PROJECT_CREATE_KEY_MS,
+      expiresAt: now + CREATE_KEY_TTL_MS,
     });
     return result;
   });
+
+type CreateAssetResult =
+  | { status: "created"; asset: AssetMeta; traceId: string }
+  | { status: "project_not_found" }
+  | { status: "key_reused" };
+
+export const createAsset = (
+  userId: string,
+  projectId: string,
+  input: AssetInput,
+  idempotencyKey: string,
+): Promise<CreateAssetResult> =>
+  updateMockDatabase(userId, (database) => {
+    if (!database.projects.some(({ id }) => id === projectId)) {
+      return { status: "project_not_found" };
+    }
+
+    const now = Date.now();
+    database.assetCreations = database.assetCreations.filter(({ expiresAt }) => expiresAt > now);
+    const hash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+    const replay = database.assetCreations.find(
+      (entry) => entry.projectId === projectId && entry.key === idempotencyKey,
+    );
+    if (replay) {
+      return replay.hash === hash
+        ? { status: "created", asset: replay.asset, traceId: replay.traceId }
+        : { status: "key_reused" };
+    }
+
+    const timestamp = new Date(now).toISOString();
+    const record: MockAssetRecord = {
+      id: randomUUID(),
+      projectId,
+      name: input.name,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      graphData: input.graph,
+      layout: input.layout,
+    };
+    const asset = toAssetMeta(record);
+    const traceId = randomUUID();
+    database.assets.unshift(record);
+    database.assetCreations.push({
+      projectId,
+      key: idempotencyKey,
+      hash,
+      asset,
+      traceId,
+      expiresAt: now + CREATE_KEY_TTL_MS,
+    });
+    return { status: "created", asset, traceId };
+  });
+
+export const getProjectAsset = async (
+  userId: string,
+  projectId: string,
+  assetId: string,
+): Promise<MockAssetRecord | null> => {
+  const database = await readMockDatabase(userId);
+  if (!database.projects.some(({ id }) => id === projectId)) return null;
+  return database.assets.find((asset) => asset.id === assetId && asset.projectId === projectId) ?? null;
+};
 
 export type CreateConversationResult =
   | { status: "created"; conversation: Conversation }
@@ -293,6 +368,7 @@ export const createConversation = async (
       projectId,
       title: input.title ?? "新会话",
       draftGraph: initialAsset?.graphData ?? null,
+      draftLayout: initialAsset?.layout,
       draftVersion: 0,
       messageCount: 0,
       lastMessage: null,
@@ -309,47 +385,142 @@ export const createConversation = async (
     };
   });
 
-/** 删除项目：级联删除其知识库文件、资产与会话。 */
-export const deleteProject = async (userId: string, projectId: string): Promise<boolean> =>
+export const forkConversation = (
+  userId: string,
+  conversationId: string,
+  { sourceMessageId }: ForkInput,
+  idempotencyKey: string,
+) =>
   updateMockDatabase(userId, (database) => {
+    const source = getRunConversation(database, conversationId);
+    if (!database.projects.some(({ id }) => id === source.projectId)) {
+      throw new MockRunError(404, ERROR_CODES.CONVERSATION_NOT_FOUND, "会话不存在");
+    }
+
+    const now = Date.now();
+    database.conversationForks = database.conversationForks.filter(
+      ({ expiresAt }) => expiresAt > now,
+    );
+    const replay = database.conversationForks.find(
+      ({ key, result }) =>
+        key === idempotencyKey && result.forkedFrom.conversationId === conversationId,
+    );
+    if (replay) {
+      if (replay.result.forkedFrom.sourceMessageId !== sourceMessageId) {
+        throw new MockRunError(422, ERROR_CODES.IDEMPOTENCY_KEY_REUSED, "该请求键已用于其他分叉");
+      }
+      return { result: replay.result, traceId: replay.traceId };
+    }
+
+    const sourceIndex = source.messages.findIndex(({ id }) => id === sourceMessageId);
+    if (sourceIndex === -1) {
+      throw new MockRunError(404, ERROR_CODES.MESSAGE_NOT_FOUND, "消息不属于当前会话");
+    }
+    if (sourceIndex + 1 > FORK_MESSAGE_LIMIT) {
+      throw new MockRunError(
+        422,
+        ERROR_CODES.VALIDATION_FAILED,
+        `一次最多复制 ${FORK_MESSAGE_LIMIT} 条消息，请选择更早的消息。`,
+      );
+    }
+
+    const messages = source.messages.slice(0, sourceIndex + 1).map((message): MockStoredMessage => {
+      const id = randomUUID();
+      const card = message.metadata?.card;
+      if (!card) return { ...message, id };
+      return {
+        ...message,
+        id,
+        metadata: {
+          ...message.metadata,
+          card: {
+            ...card,
+            id: randomUUID(),
+            messageId: id,
+            status: card.status === "pending" ? "expired" : card.status,
+          },
+        },
+      };
+    });
+    const timestamp = new Date(now).toISOString();
+    const titleSuffix = "（分叉）";
+    const titleLimit = CreateConversationInput.shape.title.unwrap().maxLength;
+    const title = titleLimit === null
+      ? source.title
+      : source.title.slice(0, titleLimit - titleSuffix.length).toWellFormed();
+    const record: MockConversationRecord = {
+      id: randomUUID(),
+      projectId: source.projectId,
+      title: `${title}${titleSuffix}`,
+      draftGraph: getHistoricalDraft(messages),
+      draftVersion: 0,
+      messageCount: 0,
+      lastMessage: null,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      messages,
+    };
+    updateConversationMessages(record, messages[sourceIndex]);
+
+    const result = {
+      ...toMockConversation(record),
+      forkedFrom: { conversationId, sourceMessageId },
+    };
+    const traceId = randomUUID();
+    database.conversations.push(record);
+    database.conversationForks.push({
+      key: idempotencyKey,
+      result,
+      traceId,
+      expiresAt: now + CREATE_KEY_TTL_MS,
+    });
+    return { result, traceId };
+  });
+
+/** 删除项目：级联删除其知识库文件、资产与会话。 */
+export const deleteProject = async (userId: string, projectId: string): Promise<boolean> => {
+  const removedFileIds = await updateMockDatabase(userId, (database) => {
     const exists = database.projects.some(
       (project) => project.id === projectId,
     );
 
     if (!exists) {
-      return false;
+      return null;
     }
 
+    const fileIds = database.files.flatMap((file) => file.projectId === projectId && file.upload ? [file.id] : []);
     database.projects = database.projects.filter((project) => project.id !== projectId);
     database.files = database.files.filter((file) => file.projectId !== projectId);
     database.assets = database.assets.filter((asset) => asset.projectId !== projectId);
+    database.assetCreations = database.assetCreations.filter((entry) => entry.projectId !== projectId);
+    database.conversationForks = database.conversationForks.filter(
+      ({ result }) => result.projectId !== projectId,
+    );
     database.conversations = database.conversations.filter(
       (conversation) => conversation.projectId !== projectId,
     );
 
-    return true;
+    return fileIds;
   });
+  if (!removedFileIds) return false;
+  for (const fileId of removedFileIds) await discardMockUpload(userId, fileId);
+  return true;
+};
 
 export const deleteFile = async (
   userId: string,
   projectId: string,
   fileId: string,
-): Promise<boolean> =>
-  updateMockDatabase(userId, (database) => {
-    const exists = database.files.some(
+): Promise<boolean> => {
+  const removed = await updateMockDatabase(userId, (database) => {
+    const index = database.files.findIndex(
       (file) => file.id === fileId && file.projectId === projectId,
     );
-
-    if (!exists) {
-      return false;
-    }
-
-    database.files = database.files.filter(
-      (file) => !(file.id === fileId && file.projectId === projectId),
-    );
-
-    return true;
+    return index < 0 ? undefined : database.files.splice(index, 1)[0];
   });
+  if (removed?.upload) await discardMockUpload(userId, removed.id);
+  return removed !== undefined;
+};
 
 export const deleteAsset = async (
   userId: string,
@@ -387,6 +558,9 @@ export const deleteConversation = async (
 
     database.conversations = database.conversations.filter(
       (conversation) => conversation.id !== conversationId,
+    );
+    database.conversationForks = database.conversationForks.filter(
+      ({ result }) => result.forkedFrom.conversationId !== conversationId,
     );
 
     return true;
@@ -427,15 +601,7 @@ export const appendMessage = async (
       return null;
     }
 
-    const timestamp = new Date().toISOString();
-    const message: Message = {
-      id: randomUUID(),
-      role: "user",
-      content: input.content,
-      graphSnapshot: null,
-      metadata: null,
-      createdAt: timestamp,
-    };
+    const message = makeUserMessage(conversation, input.content);
 
     conversation.messages.push(message);
     conversation.messageCount += 1;
@@ -443,11 +609,11 @@ export const appendMessage = async (
       id: message.id,
       role: message.role,
       contentPreview: input.content.slice(0, 80),
-      createdAt: timestamp,
+      createdAt: message.createdAt,
     };
-    conversation.updatedAt = timestamp;
+    conversation.updatedAt = message.createdAt;
 
-    return message;
+    return Message.parse(message);
   });
 
 export const getMockConversationRecord = async (
@@ -487,6 +653,31 @@ export const getConversation = async (
   return record ? toMockConversation(record) : null;
 };
 
+export const saveConversationDraft = (
+  userId: string,
+  conversationId: string,
+  input: SaveDraftInput,
+): Promise<SaveDraftResult> =>
+  updateMockDatabase(userId, (database) => {
+    const conversation = getRunConversation(database, conversationId);
+    if (conversation.draftVersion !== input.baseVersion) {
+      throw new MockRunError(
+        409,
+        ERROR_CODES.DRAFT_VERSION_CONFLICT,
+        "画布已有更新，请读取已保存的草稿。",
+      );
+    }
+
+    conversation.draftGraph = input.graph;
+    conversation.draftLayout = input.layout;
+    conversation.draftVersion += 1;
+    conversation.updatedAt = new Date().toISOString();
+    return {
+      draftVersion: conversation.draftVersion,
+      updatedAt: conversation.updatedAt,
+    };
+  });
+
 /**
  * §4.4：消息游标分页。
  * cursor 使用消息 id（对前端不透明）；backward 从最新往前翻，forward 从游标往后翻。
@@ -517,7 +708,7 @@ export const listMessages = async (
       : messages.length;
     const endIndex = cursorIndex === -1 ? messages.length : cursorIndex;
     const startIndex = Math.max(0, endIndex - limit);
-    const items = messages.slice(startIndex, endIndex);
+    const items = messages.slice(startIndex, endIndex).map((message) => Message.parse(message));
     const hasMore = startIndex > 0;
 
     return {
@@ -531,7 +722,7 @@ export const listMessages = async (
     ? messages.findIndex((message) => message.id === cursor)
     : -1;
   const startIndex = cursorIndex + 1;
-  const items = messages.slice(startIndex, startIndex + limit);
+  const items = messages.slice(startIndex, startIndex + limit).map((message) => Message.parse(message));
   const hasMore = startIndex + items.length < messages.length;
 
   return {

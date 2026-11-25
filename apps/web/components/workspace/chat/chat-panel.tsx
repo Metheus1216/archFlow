@@ -1,18 +1,25 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { Loader2, Send, Square, X } from "lucide-react";
 import { toast } from "sonner";
-import type { Message, Page, ProjectNode, RunStage } from "@arch-flow/shared";
+import type {
+  LooseGraph,
+  Message,
+  Page,
+  ProjectNode,
+  RunStage,
+} from "@arch-flow/shared";
 import { BrandMark } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { projectQueryKey } from "@/lib/query-keys";
+import { activeRunQueryKey, projectQueryKey } from "@/lib/query-keys";
 import { isRunInProgress } from "@/lib/run-view";
 import { useConversation } from "@/hooks/use-conversation";
 import { useConversationRun } from "@/hooks/use-conversation-run";
+import { useForkConversation } from "@/hooks/use-fork-conversation";
 import { useMessages } from "@/hooks/use-messages";
 import { DEFAULT_PROJECT_NAME, useCreateProject } from "@/hooks/use-projects";
 import {
@@ -20,6 +27,9 @@ import {
   type ChatSubmission,
 } from "@/hooks/use-send-message";
 import { ChatHeader } from "./chat-header";
+import { MessageActionDialog } from "./message-action-dialog";
+import { MessageActionsMenu } from "./message-actions-menu";
+import { MessageCitations } from "./message-citations";
 import { MessageGraphDialog } from "./message-graph-dialog";
 
 /** 输入框默认 2 行（48px），最多撑到 4 行（96px）后出现滚动条。 */
@@ -39,6 +49,21 @@ type GraphReference = {
   label: string;
 };
 
+type ComposerDraft = {
+  text: string;
+  graphReference?: GraphReference;
+};
+
+type SubmissionOptions = Pick<ChatSubmission, "interruptId" | "cardMessageId"> & {
+  submittedDraft?: string;
+};
+
+type MessageAction =
+  | { kind: "fork"; sourceMessageId: Message["id"] }
+  | { kind: "restore"; snapshot: LooseGraph; baseVersion: number };
+
+const EMPTY_COMPOSER_DRAFT: ComposerDraft = { text: "" };
+
 const showLiveMessage = (saved: Message[], live?: Message) => {
   if (!live || !(live.content || live.metadata || live.graphSnapshot))
     return saved;
@@ -54,31 +79,37 @@ const showLiveMessage = (saved: Message[], live?: Message) => {
   );
 };
 
-const MessageTime = ({ createdAt }: { createdAt: string }) => (
-  <p className="mt-1 text-[10px] text-muted-foreground/70">
-    {createdAt.slice(11, 16)}
-  </p>
-);
-
 export const ChatPanel = ({
   conversationId,
+  flushCanvasDraft,
+  restoreSnapshot,
 }: {
   conversationId: string | null;
+  flushCanvasDraft: () => Promise<boolean>;
+  restoreSnapshot: (snapshot: LooseGraph, baseVersion: number) => Promise<void>;
 }) => {
-  const [draft, setDraft] = useState("");
-  const [graphReference, setGraphReference] = useState<GraphReference>();
-  const selectedGraph =
-    graphReference?.conversationId === conversationId
-      ? graphReference
-      : undefined;
-  const activeConversation = useRef(conversationId);
+  const [drafts, setDrafts] = useState<
+    ReadonlyMap<string | null, ComposerDraft>
+  >(() => new Map());
+  const { text: draft, graphReference: selectedGraph } =
+    drafts.get(conversationId) ?? EMPTY_COMPOSER_DRAFT;
+  const visit = useMemo(() => ({ conversationId }), [conversationId]);
+  const activeVisit = useRef<typeof visit | null>(visit);
+  const submissionVisit = useRef<typeof visit | null>(null);
+  const projectCreationKey = useRef<string | null>(null);
+  const forkKeys = useRef(new Map<string, string>());
+  const [savingVisit, setSavingVisit] = useState<typeof visit>();
+  const [messageAction, setMessageAction] = useState<{
+    action: MessageAction;
+    trigger: HTMLButtonElement | null;
+    visit: typeof visit;
+  }>();
   const draftRef = useRef<HTMLTextAreaElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const historyAnchor = useRef<{ row: Element; top: number } | null>(null);
   const followBottom = useRef(true);
-  const lastSubmission = useRef<ChatSubmission | null>(null);
-  const sending = useRef(false);
+  const lastSubmissions = useRef(new Map<string, ChatSubmission>());
   const [composerHeight, setComposerHeight] = useState<number | null>(null);
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -92,6 +123,13 @@ export const ChatPanel = ({
   } = useMessages(conversationId);
   const generation = useConversationRun(conversationId);
   const createProject = useCreateProject();
+  const forkConversation = useForkConversation();
+  const currentAction =
+    messageAction?.visit === visit ? messageAction : undefined;
+  const historyById = useMemo(
+    () => new Map(savedMessages.map((message) => [message.id, message])),
+    [savedMessages],
+  );
   const sendMessage = generation.send;
   const liveMessage =
     generation.phase === "settled" && messagesQuery.data
@@ -115,23 +153,25 @@ export const ChatPanel = ({
     generation.status === "waiting_input" && runCard?.status === "pending"
       ? runCard
       : undefined;
+  const savingCanvas = savingVisit === visit;
   const isBusy =
+    savingCanvas ||
     sendMessage.isPending ||
     createProject.isPending ||
-    generation.isLoading ||
     generation.cancel.isPending;
   const canSubmit =
+    generation.hasRunState &&
     !isBusy &&
     !isRunning &&
     (generation.status !== "waiting_input" || Boolean(waitingCard));
 
-  useEffect(() => {
-    activeConversation.current = conversationId;
+  useLayoutEffect(() => {
+    activeVisit.current = visit;
     followBottom.current = true;
-    setGraphReference((current) =>
-      current?.conversationId === conversationId ? current : undefined,
-    );
-  }, [conversationId]);
+    return () => {
+      activeVisit.current = null;
+    };
+  }, [visit]);
 
   useLayoutEffect(() => {
     const anchor = historyAnchor.current;
@@ -161,7 +201,7 @@ export const ChatPanel = ({
       Math.max(textarea.scrollHeight, DRAFT_MIN_HEIGHT),
       DRAFT_MAX_HEIGHT,
     )}px`;
-  }, [draft]);
+  }, [draft, conversationId]);
 
   /**
    * 底部占位盒保留输入框的 2 行基础高度及其他控件；
@@ -201,54 +241,199 @@ export const ChatPanel = ({
     });
   };
 
+  const closeMessageAction = () => {
+    setMessageAction((current) =>
+      current === currentAction ? undefined : current,
+    );
+  };
+
+  const confirmMessageAction = async () => {
+    if (!currentAction || !conversationId || activeVisit.current !== visit)
+      return;
+    const { action } = currentAction;
+    if (action.kind === "restore") {
+      await restoreSnapshot(action.snapshot, action.baseVersion);
+      if (activeVisit.current === visit) toast.success("已恢复快照");
+      return;
+    }
+
+    const operation = `${conversationId}:${action.sourceMessageId}`;
+    const idempotencyKey =
+      forkKeys.current.get(operation) ?? crypto.randomUUID();
+    forkKeys.current.set(operation, idempotencyKey);
+    const forked = await forkConversation.mutateAsync({
+      conversationId,
+      sourceMessageId: action.sourceMessageId,
+      idempotencyKey,
+    });
+    forkKeys.current.delete(operation);
+    if (activeVisit.current === visit) {
+      router.push(`/workspace?conversationId=${forked.id}`);
+    }
+  };
+
+  const renderMessageFooter = ({ id, createdAt }: Message) => {
+    const saved = historyById.get(id);
+    const baseVersion = conversation.data?.draftVersion;
+    const hasActions =
+      conversationId &&
+      saved &&
+      (saved.role === "user" ||
+        (saved.role === "assistant" &&
+          (saved.content || saved.metadata || saved.graphSnapshot)));
+
+    return (
+      <div className="mt-1 flex items-center gap-1">
+        <time
+          dateTime={createdAt}
+          className="text-[10px] text-muted-foreground/70"
+        >
+          {createdAt.slice(11, 16)}
+        </time>
+        {hasActions && (
+          <MessageActionsMenu
+            snapshot={saved.graphSnapshot ?? null}
+            disabled={forkConversation.isPending}
+            onFork={(trigger) =>
+              setMessageAction({
+                visit,
+                trigger,
+                action: { kind: "fork", sourceMessageId: saved.id },
+              })
+            }
+            onRestore={
+              baseVersion === undefined
+                ? undefined
+                : (snapshot, trigger) =>
+                    setMessageAction({
+                      visit,
+                      trigger,
+                      action: { kind: "restore", snapshot, baseVersion },
+                    })
+            }
+          />
+        )}
+      </div>
+    );
+  };
+
+  const updateDraft = (
+    targetId: string | null,
+    update: (draft: ComposerDraft) => ComposerDraft,
+  ) => {
+    setDrafts((current) => {
+      const previous = current.get(targetId) ?? EMPTY_COMPOSER_DRAFT;
+      const next = update(previous);
+      if (
+        next.text === previous.text &&
+        next.graphReference === previous.graphReference
+      ) {
+        return current;
+      }
+
+      const updated = new Map(current);
+      if (next.text || next.graphReference) updated.set(targetId, next);
+      else updated.delete(targetId);
+      return updated;
+    });
+  };
+
+  const setDraft = (text: string) =>
+    updateDraft(conversationId, (current) => ({ ...current, text }));
+
   const toggleGraphReference = (message: Message) => {
-    if (!conversationId || !canSubmit || sending.current) return;
+    if (!conversationId || !canSubmit || submissionVisit.current === visit)
+      return;
 
     const time = message.createdAt.slice(11, 19);
     const excerpt = message.content.trim().split(/\r?\n/, 1).at(0);
     const label = excerpt ? `${time} ${excerpt}` : time;
-    setGraphReference((current) =>
-      current?.conversationId === conversationId &&
-      current.messageId === message.id
-        ? undefined
-        : { conversationId, messageId: message.id, label },
-    );
+    updateDraft(conversationId, (current) => ({
+      ...current,
+      graphReference:
+        current.graphReference?.messageId === message.id
+          ? undefined
+          : { conversationId, messageId: message.id, label },
+    }));
     draftRef.current?.focus();
   };
 
-  const submit = (targetId: string, content: string, interruptId?: string) => {
-    if (sending.current) return;
+  const send = async (
+    targetId: string,
+    content: string,
+    { interruptId, cardMessageId, submittedDraft }: SubmissionOptions = {},
+  ) => {
     const variables = prepareChatSubmission(
-      { conversationId: targetId, content, interruptId },
-      lastSubmission.current,
+      { conversationId: targetId, content, interruptId, cardMessageId },
+      lastSubmissions.current.get(targetId) ?? null,
       selectedGraph,
     );
-    lastSubmission.current = variables;
+    lastSubmissions.current.set(targetId, variables);
     followBottom.current = true;
-    sending.current = true;
-    setDraft("");
-    const send = async () => {
-      try {
-        await sendMessage.mutateAsync(variables);
-        lastSubmission.current = null;
-        setGraphReference((current) =>
-          current === selectedGraph ? undefined : current,
+    try {
+      await sendMessage.mutateAsync(variables);
+      lastSubmissions.current.delete(targetId);
+      updateDraft(targetId, (current) => ({
+        text: current.text === submittedDraft ? "" : current.text,
+        graphReference:
+          current.graphReference === selectedGraph
+            ? undefined
+            : current.graphReference,
+      }));
+    } catch (error) {
+      if (
+        activeVisit.current === visit ||
+        activeVisit.current?.conversationId === targetId
+      ) {
+        toast.error(
+          error instanceof Error ? error.message : "发送失败，请重试。",
         );
-      } catch (error) {
-        if (
-          activeConversation.current === targetId ||
-          (conversationId === null && activeConversation.current === null)
-        ) {
-          setDraft((current) => current || content);
-          toast.error(
-            error instanceof Error ? error.message : "发送失败，请重试。",
-          );
-        }
-      } finally {
-        sending.current = false;
       }
-    };
-    void send();
+    }
+  };
+
+  const runSubmission = async (work: () => Promise<void>) => {
+    if (submissionVisit.current === visit) return;
+    submissionVisit.current = visit;
+    try {
+      await work();
+    } finally {
+      if (submissionVisit.current === visit) submissionVisit.current = null;
+    }
+  };
+
+  const submit = (content: string, options?: SubmissionOptions) => {
+    if (!conversationId || !canSubmit) return;
+
+    void runSubmission(async () => {
+      setSavingVisit(visit);
+      followBottom.current = true;
+      let saved = false;
+      try {
+        saved = await flushCanvasDraft();
+      } catch {
+        saved = false;
+      } finally {
+        setSavingVisit((current) => (current === visit ? undefined : current));
+      }
+
+      if (activeVisit.current !== visit) return;
+      if (!saved) {
+        toast.error("请先完成右侧画布的保存，再发送消息。");
+        return;
+      }
+      const runState = queryClient.getQueryState(
+        activeRunQueryKey(conversationId),
+      );
+      if (
+        runState?.status !== "success" ||
+        runState.fetchStatus === "fetching"
+      ) {
+        toast.info("请等会话状态恢复后重新发送。");
+        return;
+      }
+      await send(conversationId, content, options);
+    });
   };
 
   const handleSend = () => {
@@ -256,7 +441,7 @@ export const ChatPanel = ({
     if (!content || !canSubmit) return;
 
     if (conversationId) {
-      submit(conversationId, content, waitingCard?.id);
+      submit(content, { interruptId: waitingCard?.id, submittedDraft: draft });
       return;
     }
 
@@ -268,33 +453,46 @@ export const ChatPanel = ({
       return;
     }
 
-    if (cachedProjects.items.length > 0) {
+    if (cachedProjects.items.length > 0 && !projectCreationKey.current) {
       toast.info("请先从左侧选择一个会话");
       return;
     }
 
     /** 边界：项目数为 0 时，发送会话消息前先创建项目与首个会话。 */
-    setDraft("");
-    createProject.mutate(
-      { name: DEFAULT_PROJECT_NAME },
-      {
-        onSuccess: (project) => {
-          const nextConversationId = project.lastActiveConversationId;
+    void runSubmission(async () => {
+      projectCreationKey.current ??= crypto.randomUUID();
+      try {
+        const project = await createProject.mutateAsync({
+          name: DEFAULT_PROJECT_NAME,
+          idempotencyKey: projectCreationKey.current,
+        });
+        projectCreationKey.current = null;
+        if (activeVisit.current !== visit) return;
 
-          if (!nextConversationId) {
-            toast.error("项目已创建，但没有可用的会话");
-            return;
+        const nextConversationId = project.lastActiveConversationId;
+        if (!nextConversationId) {
+          toast.error("项目已创建，但没有可用的会话");
+          return;
+        }
+
+        setDrafts((current) => {
+          const next = new Map(current);
+          next.delete(null);
+          if (!next.has(nextConversationId)) {
+            next.set(nextConversationId, current.get(null) ?? { text: draft });
           }
-
-          router.replace(`/workspace?conversationId=${nextConversationId}`);
-          submit(nextConversationId, content);
-        },
-        onError: (error) => {
-          setDraft(content);
-          toast.error(error.message);
-        },
-      },
-    );
+          return next;
+        });
+        router.replace(`/workspace?conversationId=${nextConversationId}`);
+        await send(nextConversationId, content, { submittedDraft: draft });
+      } catch (error) {
+        if (activeVisit.current === visit) {
+          toast.error(
+            error instanceof Error ? error.message : "创建项目失败，请重试。",
+          );
+        }
+      }
+    });
   };
 
   return (
@@ -403,7 +601,7 @@ export const ChatPanel = ({
               <div className="max-w-[88%] rounded-xl rounded-tr-sm bg-secondary px-4 py-3 text-[13px] leading-6 text-secondary-foreground">
                 <p className="whitespace-pre-wrap">{message.content}</p>
               </div>
-              <MessageTime createdAt={message.createdAt} />
+              {renderMessageFooter(message)}
             </div>
           ) : (
             <div
@@ -419,6 +617,9 @@ export const ChatPanel = ({
                       {message.content}
                     </p>
                   )}
+                {Boolean(message.metadata?.citations?.length) && (
+                  <MessageCitations citations={message.metadata?.citations ?? []} />
+                )}
                 {message.metadata?.card && (
                   <div className="mt-2 flex flex-col items-start gap-2 rounded-md border border-border p-3">
                     <p className="text-sm">{message.metadata.card.title}</p>
@@ -437,10 +638,10 @@ export const ChatPanel = ({
                             variant="outline"
                             size="sm"
                             disabled={!canSubmit}
-                            onClick={() => {
-                              if (conversationId)
-                                submit(conversationId, value, waitingCard.id);
-                            }}
+                            onClick={() => submit(value, {
+                              interruptId: waitingCard.id,
+                              cardMessageId: message.id,
+                            })}
                           >
                             {label}
                           </Button>
@@ -473,25 +674,27 @@ export const ChatPanel = ({
                     </Button>
                   </div>
                 )}
-                <MessageTime createdAt={message.createdAt} />
+                {renderMessageFooter(message)}
               </div>
             </div>
           ),
         )}
 
-        {(sendMessage.isPending || isRunning) &&
+        {(savingCanvas || sendMessage.isPending || isRunning) &&
           generation.phase !== "unavailable" && (
             <p
               role="status"
               className="mt-4 flex items-center gap-2 text-xs text-muted-foreground"
             >
               <Loader2 className="size-3.5 animate-spin" />
-              {generation.phase === "reconnecting" ||
-              generation.phase === "polling"
-                ? "正在恢复连接…"
-                : generation.view?.stage
-                  ? STAGE_LABELS[generation.view.stage]
-                  : "正在处理消息…"}
+              {savingCanvas
+                ? "正在保存画布…"
+                : generation.phase === "reconnecting" ||
+                    generation.phase === "polling"
+                  ? "正在恢复连接…"
+                  : generation.view?.stage
+                    ? STAGE_LABELS[generation.view.stage]
+                    : "正在处理消息…"}
             </p>
           )}
 
@@ -539,6 +742,15 @@ export const ChatPanel = ({
         )}
       </div>
 
+      {currentAction && (
+        <MessageActionDialog
+          action={currentAction.action.kind}
+          trigger={currentAction.trigger}
+          onClose={closeMessageAction}
+          onConfirm={confirmMessageAction}
+        />
+      )}
+
       <div
         className="relative shrink-0"
         style={composerHeight === null ? undefined : { height: composerHeight }}
@@ -560,10 +772,13 @@ export const ChatPanel = ({
                   className="mb-2 max-w-full"
                   aria-label="移除历史图引用"
                   title={selectedGraph.label}
-                  disabled={sendMessage.isPending}
+                  disabled={savingCanvas || sendMessage.isPending}
                   onClick={() => {
-                    if (sending.current) return;
-                    setGraphReference(undefined);
+                    if (submissionVisit.current === visit) return;
+                    updateDraft(conversationId, (current) => ({
+                      ...current,
+                      graphReference: undefined,
+                    }));
                     draftRef.current?.focus();
                   }}
                 >

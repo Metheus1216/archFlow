@@ -7,7 +7,7 @@ import type {
   Page,
   ProjectNode,
 } from "@arch-flow/shared";
-import { requestApi } from "@/lib/api-client";
+import { apiPath, requestApi } from "@/lib/api-client";
 import { conversationQueryKey, projectQueryKey } from "@/lib/query-keys";
 
 type RenameConversationVariables = {
@@ -22,7 +22,7 @@ export const useRenameConversation = () => {
   return useMutation<Conversation, Error, RenameConversationVariables>({
     mutationFn: ({ conversationId, title }) =>
       requestApi<Conversation>(
-        `/api/mock/conversations/${conversationId}`,
+        apiPath(`/conversations/${encodeURIComponent(conversationId)}`),
         {
           method: "PATCH",
           body: JSON.stringify({ title }),
@@ -42,7 +42,6 @@ export const useRenameConversation = () => {
                           ? {
                               ...item,
                               title: conversation.title,
-                              updatedAt: conversation.updatedAt,
                             }
                           : item,
                       ),
@@ -55,7 +54,7 @@ export const useRenameConversation = () => {
 
       queryClient.setQueryData<Conversation>(
         conversationQueryKey(conversation.id),
-        conversation,
+        (current) => current ? { ...current, title: conversation.title } : conversation,
       );
 
       // 项目树和会话详情都已在本地更新，不再触发额外的项目列表请求。

@@ -3,14 +3,9 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import type {
-  Conversation,
-  CreateConversationInput,
-  Page,
-  ProjectNode,
-} from "@arch-flow/shared";
-import { requestApi } from "@/lib/api-client";
-import { projectQueryKey } from "@/lib/query-keys";
+import type { Conversation, CreateConversationInput } from "@arch-flow/shared";
+import { FORMAL_API_ENABLED, apiPath, requestApi } from "@/lib/api-client";
+import { cacheCreatedConversation } from "@/lib/cache-created-conversation";
 
 type CreateConversationVariables = CreateConversationInput & {
   projectId: string;
@@ -24,36 +19,15 @@ export const useCreateConversation = () => {
   return useMutation<Conversation, Error, CreateConversationVariables>({
     mutationFn: ({ projectId, ...input }) =>
       requestApi<Conversation>(
-        `/api/mock/projects/${projectId}/conversations`,
+        apiPath(`/projects/${encodeURIComponent(projectId)}/conversations`),
         {
           method: "POST",
+          headers: FORMAL_API_ENABLED ? { "Idempotency-Key": crypto.randomUUID() } : undefined,
           body: JSON.stringify(input),
         },
       ),
     onSuccess: (conversation) => {
-      queryClient.setQueryData<Page<ProjectNode>>(projectQueryKey, (current) =>
-        current
-          ? {
-              ...current,
-              items: current.items.map((project) =>
-                project.id === conversation.projectId
-                  ? {
-                      ...project,
-                      lastActiveConversationId: conversation.id,
-                      conversations: [
-                        {
-                          id: conversation.id,
-                          title: conversation.title,
-                          updatedAt: conversation.updatedAt,
-                        },
-                        ...project.conversations,
-                      ],
-                    }
-                  : project,
-              ),
-            }
-          : current,
-      );
+      cacheCreatedConversation(queryClient, conversation);
 
       // 会话已写入项目树缓存；跳转由 RSC 负责，不再立即 refetch 项目列表。
       toast.success("已创建新会话");

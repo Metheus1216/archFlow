@@ -2,15 +2,17 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type {
-  CancelResult,
-  Message,
+import {
+  ActiveRun,
+  type CancelResult,
+  type Message,
   MockActiveRun,
-  MockRunAccepted,
-  MockRunSnapshot,
-  Page,
+  type MockRunSnapshot,
+  type Page,
+  Run,
+  type RunAccepted,
 } from "@arch-flow/shared";
-import { ApiError, requestApi } from "@/lib/api-client";
+import { ApiError, FORMAL_API_ENABLED, apiPath, requestApi } from "@/lib/api-client";
 import {
   activeRunQueryKey,
   conversationQueryKey,
@@ -19,11 +21,13 @@ import {
 } from "@/lib/query-keys";
 import {
   applyRunFrame,
+  applyRunSnapshot,
   createRunView,
   isRunInProgress,
   type RunView,
 } from "@/lib/run-view";
 import { connectRunStream, waitForRunRetry } from "@/lib/sse-client";
+import { getMessagePage } from "./use-messages";
 import { useSendMessage } from "./use-send-message";
 
 const POLL_INTERVAL_MS = 2_000;
@@ -34,7 +38,7 @@ const EXTRAS_RECHECK_DELAYS_MS = [500, 1_000, 2_500, 5_000, 7_500, 10_000];
 type RunSubscription = { conversationId: string; lastView?: RunView };
 
 type FollowState = {
-  handle: MockRunAccepted;
+  handle: RunAccepted;
   subscription?: RunSubscription;
   view: RunView;
   phase:
@@ -46,13 +50,24 @@ type FollowState = {
     | "unavailable";
 };
 
-const readRun = (runId: string, signal: AbortSignal) =>
-  requestApi<MockRunSnapshot>(`/api/mock/runs/${runId}`, {
-    signal: AbortSignal.any([
-      signal,
-      AbortSignal.timeout(POLL_REQUEST_TIMEOUT_MS),
-    ]),
-  });
+export const readRunView = async (
+  conversationId: string,
+  view: RunView,
+  signal: AbortSignal,
+): Promise<RunView> => {
+  const requestSignal = AbortSignal.any([signal, AbortSignal.timeout(POLL_REQUEST_TIMEOUT_MS)]);
+  const path = apiPath(`/runs/${encodeURIComponent(view.runId)}`);
+  if (!FORMAL_API_ENABLED) {
+    const snapshot = await requestApi<MockRunSnapshot>(path, { signal: requestSignal });
+    return applyRunSnapshot(view, snapshot.run, snapshot.assistantMessage, snapshot.stage);
+  }
+
+  const run = Run.parse(await requestApi<unknown>(path, { signal: requestSignal }));
+  if (run.conversationId !== conversationId) throw new Error("任务快照与当前会话不匹配");
+  const page = await getMessagePage(conversationId, requestSignal);
+  const assistant = page.items.find(({ id }) => id === run.assistantMessageId);
+  return applyRunSnapshot(view, run, assistant);
+};
 
 export const useConversationRun = (conversationId: string | null) => {
   const queryClient = useQueryClient();
@@ -68,12 +83,16 @@ export const useConversationRun = (conversationId: string | null) => {
   );
   const active = useQuery({
     queryKey: activeRunQueryKey(conversationId ?? "none"),
-    queryFn: ({ signal }) =>
-      requestApi<MockActiveRun>(
-        `/api/mock/conversations/${conversationId}/run`,
+    queryFn: async ({ signal }) => {
+      if (!conversationId) throw new Error("缺少 conversationId");
+      const result = await requestApi<unknown>(
+        apiPath(`/conversations/${encodeURIComponent(conversationId)}/run`),
         { signal },
-      ),
+      );
+      return (FORMAL_API_ENABLED ? ActiveRun : MockActiveRun).parse(result);
+    },
     enabled: conversationId !== null,
+    staleTime: 0,
     refetchOnMount: "always",
     refetchOnReconnect: false,
   });
@@ -106,7 +125,7 @@ export const useConversationRun = (conversationId: string | null) => {
       if (savedAssistant()?.metadata?.suggestedQuestions) return;
       for (const delay of EXTRAS_RECHECK_DELAYS_MS) {
         await waitForRunRetry(delay, signal);
-        const latest = queryClient.getQueryData<MockActiveRun>(runKey)?.latest;
+        const latest = queryClient.getQueryData<ActiveRun>(runKey)?.latest;
         if (signal.aborted || latest?.runId !== handle.runId) return;
         await queryClient.invalidateQueries({ queryKey: messageKey });
         if (savedAssistant()?.metadata?.suggestedQuestions) {
@@ -132,13 +151,12 @@ export const useConversationRun = (conversationId: string | null) => {
     };
     const poll = async () => {
       const deadline = Date.now() + POLL_TIMEOUT_MS;
-      const runId = handle.runId;
       publish("polling");
       while (!signal.aborted && Date.now() < deadline) {
         try {
-          const snapshot = await readRun(runId, signal);
+          const snapshot = await readRunView(conversationId, view, signal);
           if (signal.aborted) return;
-          view = applyRunFrame(view, { type: "snapshot", ...snapshot });
+          view = snapshot;
           if (!isRunInProgress(view.status)) {
             await sync();
             return;
@@ -179,6 +197,8 @@ export const useConversationRun = (conversationId: string | null) => {
         if (!signal.aborted) await poll();
       }
     };
+    const saved = savedAssistant();
+    if (!recovering && saved) view = { ...view, message: saved };
     void start();
 
     return () => controller.abort();
@@ -186,7 +206,7 @@ export const useConversationRun = (conversationId: string | null) => {
 
   const cancel = useMutation({
     mutationFn: (runId: string) =>
-      requestApi<CancelResult>(`/api/mock/runs/${runId}/cancel`, {
+      requestApi<CancelResult>(apiPath(`/runs/${encodeURIComponent(runId)}/cancel`), {
         method: "POST",
       }),
     onSuccess: async () => {
@@ -208,15 +228,16 @@ export const useConversationRun = (conversationId: string | null) => {
     view: current?.view,
     phase: current?.phase,
     status: current?.view.status ?? handle?.status,
-    isLoading: Boolean(conversationId) && active.isPending,
+    hasRunState:
+      conversationId === null || (active.isSuccess && !active.isFetching),
     error: active.error,
     send,
     cancel,
     retry: () => {
+      if (active.error || !handle) void active.refetch();
       if (conversationId && handle) {
         setRequestedSubscription({ conversationId, lastView: current?.view });
       }
-      else void active.refetch();
     },
   };
 };

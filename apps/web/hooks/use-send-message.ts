@@ -1,12 +1,14 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import type {
-  MockActiveRun,
+import {
+  AnswerCardInput,
+  type ActiveRun,
   MockRunAccepted,
-  MockSendMessageInput,
+  type MockSendMessageInput,
+  RunAccepted,
 } from "@arch-flow/shared";
-import { requestApi } from "@/lib/api-client";
+import { FORMAL_API_ENABLED, apiPath, requestApi } from "@/lib/api-client";
 import {
   activeRunQueryKey,
   messagesQueryKey,
@@ -16,6 +18,7 @@ import {
 type SendMessageVariables = MockSendMessageInput & {
   conversationId: string;
   idempotencyKey: string;
+  cardMessageId?: string;
 };
 
 export type ChatSubmission = Pick<
@@ -23,6 +26,7 @@ export type ChatSubmission = Pick<
   | "conversationId"
   | "content"
   | "interruptId"
+  | "cardMessageId"
   | "graphReferenceMessageId"
   | "idempotencyKey"
 >;
@@ -32,6 +36,7 @@ export const prepareChatSubmission = (
     conversationId,
     content,
     interruptId,
+    cardMessageId,
   }: Omit<ChatSubmission, "graphReferenceMessageId" | "idempotencyKey">,
   previous: ChatSubmission | null,
   reference?: { conversationId: string; messageId: string },
@@ -44,12 +49,14 @@ export const prepareChatSubmission = (
     previous?.conversationId === conversationId &&
     previous.content === content &&
     previous.interruptId === interruptId &&
+    previous.cardMessageId === cardMessageId &&
     previous.graphReferenceMessageId === graphReferenceMessageId;
 
   return {
     conversationId,
     content,
     interruptId,
+    cardMessageId,
     graphReferenceMessageId,
     idempotencyKey: isRetry ? previous.idempotencyKey : crypto.randomUUID(),
   };
@@ -64,20 +71,29 @@ export const useSendMessage = (
     mutationFn: async ({
       conversationId,
       idempotencyKey,
+      interruptId,
+      cardMessageId,
       ...input
-    }: SendMessageVariables) =>
-      requestApi<MockRunAccepted>(
-        `/api/mock/conversations/${conversationId}/messages`,
-        {
-          method: "POST",
-          headers: { "Idempotency-Key": idempotencyKey },
-          body: JSON.stringify(input),
-        },
-      ),
+    }: SendMessageVariables) => {
+      const messagesPath = `/conversations/${encodeURIComponent(conversationId)}/messages` as const;
+      const isCardAnswer = FORMAL_API_ENABLED && cardMessageId !== undefined;
+      const target = isCardAnswer
+        ? `${messagesPath}/${encodeURIComponent(cardMessageId)}/answer` as const
+        : messagesPath;
+      const body = isCardAnswer
+        ? AnswerCardInput.parse({ cardId: interruptId, values: [input.content] })
+        : FORMAL_API_ENABLED ? input : { ...input, interruptId };
+      const accepted = await requestApi<unknown>(apiPath(target), {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify(body),
+      });
+      return (FORMAL_API_ENABLED ? RunAccepted : MockRunAccepted).parse(accepted);
+    },
     onSuccess: async (run, { conversationId }) => {
       const queryKey = activeRunQueryKey(conversationId);
       await queryClient.cancelQueries({ queryKey });
-      queryClient.setQueryData<MockActiveRun>(queryKey, { run, latest: run });
+      queryClient.setQueryData<ActiveRun>(queryKey, { run, latest: run });
       onAccepted(conversationId);
       void queryClient.invalidateQueries({
         queryKey: messagesQueryKey(conversationId),

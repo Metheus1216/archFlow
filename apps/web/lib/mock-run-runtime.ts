@@ -23,17 +23,19 @@ import {
 import {
   acceptedRun,
   activeStatus,
+  getDraftChange,
   getReferencedGraph,
   getRunConversation,
   getRunMessage,
   getStoredRun,
   makeRunMessage,
+  makeUserMessage,
   MockRunError,
-  readMockGraph,
   snapshotRun,
   updateConversationMessages,
 } from "./mock-run-data";
 import { createMockRunFeed, type MockRunEvent } from "./mock-run-feed";
+import { readMockGraph } from "./read-mock-graph";
 
 type Store = {
   read: (userId: string) => Promise<MockDatabase>;
@@ -44,6 +46,7 @@ type Store = {
 };
 
 type ExecutionOptions = {
+  userId: string;
   signal: AbortSignal;
   deadlineAt: number;
   resume?: AgentResume;
@@ -457,6 +460,11 @@ export const createMockRunRuntime = (storage: Store, driver: MockRunDriver) => {
         (conversation, run, emit) => {
           if (run.status !== "queued" || run.workerId !== workerId) return null;
           const turn = turnFor(conversation, run);
+          const assistant = getRunMessage(conversation, run.assistantMessageId);
+          assistant.draftGraphAtSend = getDraftChange(
+            conversation,
+            conversation.messages.slice(0, conversation.messages.indexOf(assistant)),
+          );
           run.status = "running";
           const {
             id,
@@ -476,7 +484,6 @@ export const createMockRunRuntime = (storage: Store, driver: MockRunDriver) => {
             resume: resume ? true : undefined,
           });
           if (resume) {
-            const assistant = getRunMessage(conversation, assistantMessageId);
             assistant.content = "";
             emit({
               type: "text-delta",
@@ -492,6 +499,7 @@ export const createMockRunRuntime = (storage: Store, driver: MockRunDriver) => {
       signal.throwIfAborted();
       const result = AgentTurnResult.parse(
         await driver.execute(claim.turn, {
+          userId,
           signal,
           deadlineAt,
           resume: claim.resume,
@@ -576,7 +584,14 @@ export const createMockRunRuntime = (storage: Store, driver: MockRunDriver) => {
             emit({ type: "citation", sources: result.citations });
           if (result.graph) {
             assistant.graphSnapshot = result.graph;
+            delete assistant.draftGraphAtSend;
             conversation.draftGraph = result.graph;
+            if (conversation.draftLayout) {
+              const nodeIds = new Set(result.graph.nodes.map(({ id }) => id));
+              conversation.draftLayout = conversation.draftLayout.filter(
+                ({ nodeId }) => nodeIds.has(nodeId),
+              );
+            }
             conversation.draftVersion += 1;
             emit({ type: "graph", graph: result.graph, replace: true });
           }
@@ -743,15 +758,15 @@ export const createMockRunRuntime = (storage: Store, driver: MockRunDriver) => {
               "这次任务已引用一张历史图。要改选其他历史图，请取消当前任务后重新发送。",
             );
           }
-          const answer = makeRunMessage("user", input.content);
           const assistant = getRunMessage(
             conversation,
             active.assistantMessageId,
           );
+          conversation.messages = conversation.messages.filter(({ id }) => id !== assistant.id);
+          const answer = makeUserMessage(conversation, input.content);
+          delete assistant.draftGraphAtSend;
           assistant.createdAt = answer.createdAt;
-          conversation.messages = conversation.messages
-            .filter(({ id }) => id !== assistant.id)
-            .concat(answer, assistant);
+          conversation.messages.push(answer, assistant);
           updateConversationMessages(conversation, assistant);
           active.graphReferenceMessageId ??= graphReferenceMessageId;
           active.answeredInterrupts.push({
@@ -792,7 +807,7 @@ export const createMockRunRuntime = (storage: Store, driver: MockRunDriver) => {
           return { run: active, start: true };
         }
 
-        const user = makeRunMessage("user", input.content);
+        const user = makeUserMessage(conversation, input.content);
         const assistant = makeRunMessage("assistant", "");
         const newRun = makeRun(
           conversation,

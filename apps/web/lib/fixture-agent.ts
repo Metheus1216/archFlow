@@ -14,6 +14,10 @@ import {
   type AgentTurnResult,
   type CardOption,
 } from "@arch-flow/shared";
+import {
+  parseMockKnowledgeRequest,
+  type MockKnowledgeSearch,
+} from "./mock-knowledge-search";
 import { MockRunError } from "./mock-run-data";
 import type { MockRunDriver } from "./mock-run-runtime";
 
@@ -27,10 +31,12 @@ const READ_ONLY =
   /(?:只|仅)(?:想|需要)?(?:解释|说明)|(?:不要|不用|无需|请勿|别)(?:再|去)?(?:修改|改动|编辑|添加|增加|加上?|调整|接入)(?:当前)?(?:架构图|画布|缓存)|\b(?:do not|don't)\s+(?:edit|modify|change|add)\b/iu;
 const CREATE_GRAPH =
   /^(?:(?:请\s*)?(?:帮我\s*)?(?:(?:给|为).+?)?(?:生成|画|绘制|设计|规划)|(?:please\s+)?(?:draw|generate|design)\b)/iu;
-const GRAPH_EDIT =
-  /^(?:请\s*)?(?:帮我\s*)?(?:修改|调整|改动|编辑|改一下|改图|更新)/u;
+const GRAPH_TITLE = /(?:架构图|系统图|画布|草稿|(?<!截)图|版本?|^v\d+)$/iu;
+const POLICY_EDIT =
+  /^(?:请\s*)?(?:帮我\s*)?(?:先\s*)?(?:(?:给|为|在|对)\s*[^，。！？；,.!?;]+?)?(?:添加|增加|加入|加上|加(?!载|速|密|固|工|入|强|权)|接入|删除|去掉|替换|修改|调整|改动|编辑|改一下|改图|更新)/u;
 const PROJECT_SPEC =
   /^(?:请\s*)?(?:帮我\s*)?(?:按照|按|根据|遵循|参照|依照)[^，。！？；,.!?;]{0,48}?(?:规范|标准|文档|资料|知识库)[”」』》"]?\s*[，,:：]?\s*/u;
+const NO_KNOWLEDGE = "当前项目暂时没有可引用的资料。请确认相关文件已上传并解析完成。";
 const GENERIC_SUBJECT =
   /^(?:给|为|帮|请|我|想|要|你|先|一个|一张|个|张|生成|设计|规划|画|绘制|输出|架构|流程|系统|图|方案|一下|吧|呢|[\s，。！？、,.!?])*$/u;
 const DOMAINS = [
@@ -175,27 +181,33 @@ const editQueryCache = (draft: GraphInput | null, target?: string) => {
   };
 };
 
-export const createFixtureAgent = (): MockRunDriver => ({
+export const createFixtureAgent = (searchKnowledge?: MockKnowledgeSearch): MockRunDriver => ({
   clarificationOptions: ({ decision }) =>
     decision.intents.includes("generate_graph") ? OPTIONS : [],
   execute: async (
     turn,
-    { signal, resume, onStage, onTextDelta },
+    { userId, signal, resume, onStage, onTextDelta },
   ): Promise<AgentTurnResult> => {
-    const { input, draftGraph, referencedGraph, constraints } = turn;
+    const { input, draftGraph, referencedGraph, constraints, attachments } = turn;
     const answer = resume?.answer ?? "";
     const request = input.trim();
+    const parsedKnowledge = parseMockKnowledgeRequest(request, attachments);
+    const title = parsedKnowledge?.names.length === 1 ? parsedKnowledge.names[0] : undefined;
+    const graphTitle = title && !parsedKnowledge?.directed && GRAPH_TITLE.test(title) &&
+      (isHistoricalGraphRequest(title) || isCurrentGraphRequest(title));
+    const knowledge = graphTitle ? null : parsedKnowledge;
     const specification = PROJECT_SPEC.exec(request);
-    const instruction = specification
+    const instruction = knowledge?.instruction ?? (specification
       ? request.slice(specification[0].length)
-      : request;
+      : request);
     const command =
       instruction.split(/[，。！、；,.!;\n]/u, 1)[0]?.trim() ?? "";
-    const readOnly = READ_ONLY.test(request);
+    const readsKnowledge = Boolean(knowledge) && GRAPH_READ.test(request);
+    const readOnly = READ_ONLY.test(instruction) || readsKnowledge;
     const cacheAddition = readOnly ? null : CACHE_ADDITION.exec(command);
     const editRequested =
       cacheAddition !== null ||
-      (!readOnly && Boolean(specification) && GRAPH_EDIT.test(command));
+      (!readOnly && Boolean(specification || knowledge) && POLICY_EDIT.test(command));
     const createRequested =
       !readOnly && GRAPH_REQUEST.test(command) && CREATE_GRAPH.test(command);
     const resumeGeneration =
@@ -243,7 +255,7 @@ export const createFixtureAgent = (): MockRunDriver => ({
 
     const historical =
       resume?.checkpoint.question === GRAPH_REFERENCE_QUESTION ||
-      isHistoricalGraphRequest(input) ||
+      isHistoricalGraphRequest(instruction) ||
       isHistoricalGraphRequest(answer);
     if (!referencedGraph && historical) {
       return clarify(GRAPH_REFERENCE_QUESTION, "explain_graph");
@@ -252,7 +264,7 @@ export const createFixtureAgent = (): MockRunDriver => ({
       referencedGraph &&
       (editRequested ||
         createRequested ||
-        isCurrentGraphRequest(input) ||
+        isCurrentGraphRequest(instruction) ||
         isCurrentGraphRequest(answer))
     ) {
       throw new MockRunError(
@@ -262,22 +274,38 @@ export const createFixtureAgent = (): MockRunDriver => ({
       );
     }
 
-    if (generate && !subject) {
-      return clarify("你想为哪个系统绘制架构图？", "generate_graph");
-    }
-    if ((editRequested || generate) && specification) {
+    const usesKnowledge = Boolean(knowledge || specification);
+    const knowledgeWrite = usesKnowledge && (editRequested || generate);
+    const knowledgeRead = Boolean(knowledge) && !referencedGraph;
+    let evidence: Awaited<ReturnType<MockKnowledgeSearch>> | undefined;
+    if (knowledgeWrite || knowledgeRead) {
       onStage("searching_knowledge");
+      if (knowledge && searchKnowledge) evidence = await searchKnowledge(userId, turn, knowledge, signal);
+    }
+    if (knowledgeWrite) {
       throw new MockRunError(
         422,
         ERROR_CODES.AGENT_KNOWLEDGE_REQUIRED,
-        "查找项目资料时没有找到所需规范。改图和后续解释暂未完成。",
+        evidence?.citations.length
+          ? "已找到项目资料，但本地演示不能根据资料修改画布。改图和后续解释未完成。"
+          : `${evidence?.unavailableReason ?? NO_KNOWLEDGE}改图和后续解释未完成。`,
       );
+    }
+    if (generate && !subject) {
+      return clarify("你想为哪个系统绘制架构图？", "generate_graph");
     }
 
     let graph: GraphInput | null = null;
     let parts: string[];
     const graphForAnswer = referencedGraph?.graph ?? draftGraph;
-    if (cacheAddition) {
+    const citations = knowledgeRead ? evidence?.citations ?? [] : [];
+    if (knowledgeRead) {
+      parts = citations.length
+        ? ["我在当前项目资料中找到了这些相关原文：", ...citations.map(
+          ({ fileName, snippet }) => `\n\n「${fileName}」\n${snippet}`,
+        )]
+        : [evidence?.unavailableReason ?? NO_KNOWLEDGE];
+    } else if (cacheAddition) {
       onStage("drafting_graph");
       ({ graph, parts } = editQueryCache(
         draftGraph,
@@ -317,7 +345,7 @@ export const createFixtureAgent = (): MockRunDriver => ({
         subject && generate
           ? { ...constraints, projectGoal: subject }
           : constraints,
-      citations: [],
+      citations,
       graph,
     };
   },
